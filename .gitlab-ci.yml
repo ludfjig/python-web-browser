@@ -1,0 +1,33 @@
+default:
+  image: python:3.11-alpine
+
+variables:
+  QUARTER: "23sp"
+
+build-job:
+  stage: build
+  script:
+    - echo test index $CSE493X_INDEX
+    - date
+    - apk add git python3-tkinter py3-pip build-base
+    - pip3 install dukpy
+    - date
+    - git clone https://gitlab.cs.washington.edu/cse493x-${QUARTER}/cse493x-${QUARTER}-tests.git
+    - date
+    - |
+      # Run the tests
+      exit_code=0
+      if [ -e TEST_ARGS.txt ] ; then
+        echo found TEST_ARGS.txt! will call run-tests.py with the following args':'
+        cat TEST_ARGS.txt
+        python3 cse493x-${QUARTER}-tests/src/run-tests.py --index $CSE493X_INDEX `cat TEST_ARGS.txt` || exit_code=$?
+      else
+        echo no TEST_ARGS.txt found. using weekly defaults...
+        python3 cse493x-${QUARTER}-tests/src/run-tests.py --index $CSE493X_INDEX || exit_code=$?
+      fi
+    - date
+    - echo tests exited with code $exit_code
+    - exit $exit_code
+  parallel:
+    matrix:
+      - CSE493X_INDEX: [1, 2, 3, 4, 5]
