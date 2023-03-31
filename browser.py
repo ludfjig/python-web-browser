@@ -2,8 +2,10 @@ import socket
 import ssl
 import sys
 import threading
+import time
 
 cache = {}
+timers = set()
 
 
 def request(url, headers={}, depth=0):
@@ -18,8 +20,9 @@ def request(url, headers={}, depth=0):
     assert scheme in ["http", "https", "file"], f"Unknown scheme {scheme}"
 
     # check cache
-    if scheme in ["http", "https"] and original_url in cache:
-        return cache[original_url]
+    if scheme in ["http", "https"] and original_url in cache and time.time() < cache[original_url][0]:
+
+        return cache[original_url][1:]
 
     if scheme == "file":
         f = open(url)
@@ -96,8 +99,7 @@ def request(url, headers={}, depth=0):
             assert cache_control.startswith(
                 "max-age="), "Unknown cache-control"
             age = int(cache_control.split("=", 1)[1])
-            cache[original_url] = (response_headers, body)
-            threading.Timer(age, lambda: cache.pop(original_url)).start()
+            cache[original_url] = (time.time() + age, response_headers, body)
 
     s.close()
 
