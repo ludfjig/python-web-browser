@@ -1,7 +1,6 @@
 import socket
 import ssl
 import sys
-import threading
 import time
 
 cache = {}
@@ -20,8 +19,8 @@ def request(url, headers={}, depth=0):
     assert scheme in ["http", "https", "file"], f"Unknown scheme {scheme}"
 
     # check cache
-    if scheme in ["http", "https"] and original_url in cache and time.time() < cache[original_url][0]:
-
+    if (scheme in ["http", "https"] and original_url in cache
+            and time.time() < cache[original_url][0]):
         return cache[original_url][1:]
 
     if scheme == "file":
@@ -123,7 +122,7 @@ def load(url):
 
 
 if __name__ == "__main__":
-    DEFAULT_FILE_URL = "file:///mnt/c/users/ludvig/uw/CSE493X/cse493x-23sp-ludvil/browser.py"
+    DEFAULT_FILE_URL = "file://browser.py"
     if len(sys.argv) == 1:
         load(DEFAULT_FILE_URL)
     else:
