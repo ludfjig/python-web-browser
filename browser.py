@@ -2,6 +2,7 @@ import socket
 import ssl
 import sys
 import time
+import tkinter
 
 cache = {}
 timers = set()
@@ -105,6 +106,19 @@ def request(url, headers={}, depth=0):
     return response_headers, body
 
 
+def lex(body):
+    text = ""
+    in_angle = False
+    for c in body:
+        if c == "<":
+            in_angle = True
+        elif c == ">":
+            in_angle = False
+        elif not in_angle:
+            text += c
+    return text
+
+
 def show(body):
     in_angle = False
     for c in body:
@@ -116,14 +130,56 @@ def show(body):
             print(c, end="")
 
 
-def load(url):
-    headers, body = request(url)
-    show(body)
+WIDTH, HEIGHT = 800, 600
+HSTEP, VSTEP = 13, 18
+DEFAULT_FILE_URL = "file://browser.py"
+SCROLL_STEP = 100
+
+# mypy typechecker for python
+
+
+def layout(text):
+    display_list = []
+    cursor_x, cursor_y = HSTEP, VSTEP
+    for c in text:
+        display_list.append((cursor_x, cursor_y, c))
+        cursor_x += HSTEP
+        if cursor_x > WIDTH - HSTEP:
+            cursor_x = HSTEP
+            cursor_y += VSTEP
+    return display_list
+
+
+class Browser:
+    def __init__(self):
+        self.window = tkinter.Tk()
+        self.canvas = tkinter.Canvas(self.window, width=WIDTH, height=HEIGHT)
+        self.canvas.pack()
+
+        self.window.bind("<Down>", self.scrolldown)
+
+        self.scroll = 0  # scroll amount
+
+    def scrolldown(self, event):
+        self.scroll += SCROLL_STEP
+        self.draw()
+        print("scroll down")
+
+    def draw(self):
+        self.canvas.delete("all")
+        for x, y, c in self.display_list:
+            self.canvas.create_text(x, y-self.scroll, text=c)
+
+    def load(self, url):
+        headers, body = request(url)
+        text = lex(body)
+        self.display_list = layout(text)
+        self.draw()
 
 
 if __name__ == "__main__":
-    DEFAULT_FILE_URL = "file://browser.py"
     if len(sys.argv) == 1:
-        load(DEFAULT_FILE_URL)
+        Browser().load(DEFAULT_FILE_URL)
     else:
-        load(sys.argv[1])
+        Browser().load(sys.argv[1])
+    tkinter.mainloop()
