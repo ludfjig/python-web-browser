@@ -144,9 +144,9 @@ def layout(text):
     for c in text:
         display_list.append((cursor_x, cursor_y, c))
         cursor_x += HSTEP
-        if cursor_x > WIDTH - HSTEP:
-            cursor_x = HSTEP
+        if cursor_x >= WIDTH - HSTEP:
             cursor_y += VSTEP
+            cursor_x = HSTEP
     return display_list
 
 
@@ -163,11 +163,14 @@ class Browser:
     def scrolldown(self, event):
         self.scroll += SCROLL_STEP
         self.draw()
-        print("scroll down")
 
     def draw(self):
         self.canvas.delete("all")
         for x, y, c in self.display_list:
+            if y > self.scroll+HEIGHT:
+                continue
+            if y + VSTEP < self.scroll:
+                continue
             self.canvas.create_text(x, y-self.scroll, text=c)
 
     def load(self, url):
