@@ -136,17 +136,22 @@ DEFAULT_FILE_URL = "file://browser.py"
 SCROLL_STEP = 100
 
 # mypy typechecker for python
+# ran tests in WSL by accident, which failed
 
 
 def layout(text):
     display_list = []
     cursor_x, cursor_y = HSTEP, VSTEP
     for c in text:
-        display_list.append((cursor_x, cursor_y, c))
-        cursor_x += HSTEP
-        if cursor_x >= WIDTH - HSTEP:
-            cursor_y += VSTEP
+        if c == '\n':
+            cursor_y += 2*VSTEP
             cursor_x = HSTEP
+        else:
+            display_list.append((cursor_x, cursor_y, c))
+            cursor_x += HSTEP
+            if cursor_x >= WIDTH - HSTEP:
+                cursor_y += VSTEP
+                cursor_x = HSTEP
     return display_list
 
 
@@ -154,14 +159,33 @@ class Browser:
     def __init__(self):
         self.window = tkinter.Tk()
         self.canvas = tkinter.Canvas(self.window, width=WIDTH, height=HEIGHT)
-        self.canvas.pack()
+        self.canvas.pack(fill=tkinter.BOTH, expand=True)
 
         self.window.bind("<Down>", self.scrolldown)
+        self.window.bind("<Up>", self.scrollup)
+        self.window.bind("<MouseWheel>", self.scrollwheel)
+        self.window.bind("<Configure>", self.config)
 
         self.scroll = 0  # scroll amount
 
+    def config(self, event):
+        WIDTH = event.width
+        HEIGHT = event.height
+
+    def scrollwheel(self, event):
+        self.scroll -= event.delta
+        if self.scroll < 0:
+            self.scroll = 0
+        self.draw()
+
     def scrolldown(self, event):
         self.scroll += SCROLL_STEP
+        self.draw()
+
+    def scrollup(self, event):
+        self.scroll -= SCROLL_STEP
+        if self.scroll < 0:
+            self.scroll = 0
         self.draw()
 
     def draw(self):
