@@ -3,6 +3,7 @@ import ssl
 import sys
 import time
 import tkinter
+import tkinter.font
 
 cache = {}
 timers = set()
@@ -164,13 +165,34 @@ class Browser:
         self.window.bind("<Down>", self.scrolldown)
         self.window.bind("<Up>", self.scrollup)
         self.window.bind("<MouseWheel>", self.scrollwheel)
-        self.window.bind("<Configure>", self.config)
+        self.window.bind("<Configure>", self.resize)
+        self.window.bind("+", self.zoomin)
+        self.window.bind("-", self.zoomout)
 
         self.scroll = 0  # scroll amount
+        self.zoom = 1  # zoom amount
+        self.font_size = 16  # font size
 
-    def config(self, event):
+    def zoomin(self, event):
+        self.font_size *= 2
+        global HSTEP, VSTEP
+        HSTEP, VSTEP = HSTEP*2, VSTEP*2
+        self.display_list = layout(self.text)
+        self.draw()
+
+    def zoomout(self, event):
+        self.font_size //= 2
+        global HSTEP, VSTEP
+        HSTEP, VSTEP = HSTEP//2, VSTEP//2
+        self.display_list = layout(self.text)
+        self.draw()
+
+    def resize(self, event):
+        global WIDTH, HEIGHT
         WIDTH = event.width
         HEIGHT = event.height
+        self.display_list = layout(self.text)
+        self.draw()
 
     def scrollwheel(self, event):
         self.scroll -= event.delta
@@ -190,17 +212,19 @@ class Browser:
 
     def draw(self):
         self.canvas.delete("all")
+        font = tkinter.font.Font(size=self.font_size)
         for x, y, c in self.display_list:
             if y > self.scroll+HEIGHT:
                 continue
             if y + VSTEP < self.scroll:
                 continue
-            self.canvas.create_text(x, y-self.scroll, text=c)
+            self.canvas.create_text(
+                x, y-self.scroll, text=c, font=font)
 
     def load(self, url):
         headers, body = request(url)
-        text = lex(body)
-        self.display_list = layout(text)
+        self.text = lex(body)
+        self.display_list = layout(self.text)
         self.draw()
 
 
