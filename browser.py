@@ -181,6 +181,7 @@ class Layout:
         self.line = []
         self.center = False
         self.sup = False
+        self.smallcaps = False
 
         for tok in tokens:
             self.token(tok)
@@ -250,12 +251,15 @@ class Layout:
             self.sup = True
         elif tok.tag == "/sup":
             self.sup = False
+        elif tok.tag == "abbr":
+            self.smallcaps = True
+        elif tok.tag == "/abbr":
+            self.smallcaps = False
 
     def text(self, tok):
         font = get_font(self.size, self.weight, self.style)
         for word in tok.text.split():
             w = font.measure(word + " ")
-            # self.display_list.append((self.cursor_x, self.cursor_y, word, font))
             self.line.append((self.cursor_x, word, font, self.sup))
             if self.sup:
                 self.cursor_x += get_font(self.size // 2,
