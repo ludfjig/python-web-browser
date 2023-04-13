@@ -169,8 +169,6 @@ def get_font(size, weight, slant):
         FONTS[key] = font
     return FONTS[key]
 
-# mypy typechecker for python
-
 
 class Layout:
     def __init__(self, tokens):
@@ -181,6 +179,8 @@ class Layout:
         self.style = "roman"
         self.size = 16
         self.line = []
+        self.center = False
+        self.sup = False
 
         for tok in tokens:
             self.token(tok)
@@ -189,12 +189,27 @@ class Layout:
     def flush(self):
         if not self.line:
             return
-        metrics = [font.metrics() for x, word, font in self.line]
+        metrics = [font.metrics() for x, word, font, sup in self.line]
         max_ascent = max([metric["ascent"] for metric in metrics])
         baseline = self.cursor_y + 1.25 * max_ascent
-        for x, word, font in self.line:
-            y = baseline - font.metrics("ascent")
-            self.display_list.append((x, y, word, font))
+        # print(baseline)
+        shift = 0
+
+        for x, word, font, sup in self.line:
+            line_length = self.cursor_x - HSTEP - font.measure(" ")
+
+            if self.center:
+                shift = WIDTH / 2 - line_length / 2 - HSTEP
+            if sup:
+                sup_font = get_font(
+                    font.cget("size") // 2,
+                    font.cget("weight"),
+                    font.cget("slant"))
+                y = baseline - max_ascent
+                self.display_list.append((x+shift, y, word, sup_font))
+            else:
+                y = baseline - font.metrics("ascent")
+                self.display_list.append((x+shift, y, word, font))
 
         self.cursor_x = HSTEP
         self.line = []
@@ -225,17 +240,30 @@ class Layout:
         elif tok.tag == "/p":
             self.flush()
             self.cursor_y += VSTEP
+        elif tok.tag == "h1 class=\"title\"":
+            self.flush()
+            self.center = True
+        elif tok.tag == "/h1":
+            self.flush()
+            self.center = False
+        elif tok.tag == "sup":
+            self.sup = True
+        elif tok.tag == "/sup":
+            self.sup = False
 
     def text(self, tok):
         font = get_font(self.size, self.weight, self.style)
         for word in tok.text.split():
             w = font.measure(word + " ")
             # self.display_list.append((self.cursor_x, self.cursor_y, word, font))
-            self.line.append((self.cursor_x, word, font))
-            self.cursor_x += w
+            self.line.append((self.cursor_x, word, font, self.sup))
+            if self.sup:
+                self.cursor_x += get_font(self.size // 2,
+                                          self.weight, self.style).measure(word + " ")
+            else:
+                self.cursor_x += w
+
             if self.cursor_x >= WIDTH - HSTEP:
-                # self.cursor_y += font.metrics("linespace") * 1.25
-                # self.cursor_x = HSTEP
                 self.flush()
 
 
@@ -246,6 +274,7 @@ class Browser:
         self.canvas.pack()
 
         self.window.bind("<Down>", self.scrolldown)
+        self.window.bind("<Up>", self.scrollup)
 
         self.scroll = 0  # scroll amount
         self.bi_times = tkinter.font.Font(
@@ -254,6 +283,10 @@ class Browser:
             weight="bold",
             slant="italic",
         )
+
+    def scrollup(self, event):
+        self.scroll -= SCROLL_STEP
+        self.draw()
 
     def scrolldown(self, event):
         self.scroll += SCROLL_STEP
@@ -266,7 +299,8 @@ class Browser:
                 continue
             if y + VSTEP < self.scroll:
                 continue
-            self.canvas.create_text(x, y-self.scroll, text=c, font=f, anchor="nw")
+            self.canvas.create_text(
+                x, y-self.scroll, text=c, font=f, anchor="nw")
 
     def load(self, url):
         headers, body = request(url)
