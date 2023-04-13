@@ -254,8 +254,8 @@ class Layout:
     def text(self, tok):
         font = get_font(self.size, self.weight, self.style)
         for word in tok.text.split():
+
             w = font.measure(word + " ")
-            # self.display_list.append((self.cursor_x, self.cursor_y, word, font))
             self.line.append((self.cursor_x, word, font, self.sup))
             if self.sup:
                 self.cursor_x += get_font(self.size // 2,
@@ -263,8 +263,25 @@ class Layout:
             else:
                 self.cursor_x += w
 
-            if self.cursor_x >= WIDTH - HSTEP:
-                self.flush()
+            if self.cursor_x > WIDTH - HSTEP:
+                # self.cursor_x -= w
+                if "\N{soft hyphen}" in word:
+                    combine = ""
+                    splits = word.split("\N{soft hyphen}")
+                    for part in splits:
+                        if self.cursor_x + font.measure(combine + part + "-") >= WIDTH - HSTEP:
+                            self.line.append((self.cursor_x, combine+"-", font, self.sup))
+                            self.flush()
+                            combine = ""
+                        combine += part
+                    if combine != "":
+                        self.line.append((self.cursor_x, combine, font, self.sup))
+                        self.cursor_x += font.measure(combine + " ")
+                else:
+                    self.flush()
+            else:
+                self.line.append((self.cursor_x, word, font, self.sup))
+                self.cursor_x += w + font.measure(" ")
 
 
 class Browser:
