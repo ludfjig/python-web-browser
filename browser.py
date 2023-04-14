@@ -181,6 +181,7 @@ class Layout:
         self.line = []
         self.center = False
         self.sup = False
+        self.abbr = False
 
         for tok in tokens:
             self.token(tok)
@@ -189,24 +190,23 @@ class Layout:
     def flush(self):
         if not self.line:
             return
-        metrics = [font.metrics() for x, word, font, sup in self.line]
+        metrics = [font.metrics() for x, word, font, sup, abbr in self.line]
         max_ascent = max([metric["ascent"] for metric in metrics])
         baseline = self.cursor_y + 1.25 * max_ascent
-        # print(baseline)
         shift = 0
 
-        for x, word, font, sup in self.line:
+        for x, word, font, sup, abbr in self.line:
             line_length = self.cursor_x - HSTEP - font.measure(" ")
 
             if self.center:
                 shift = WIDTH / 2 - line_length / 2 - HSTEP
+
             if sup:
-                sup_font = get_font(
-                    font.cget("size") // 2,
-                    font.cget("weight"),
-                    font.cget("slant"))
                 y = baseline - max_ascent
-                self.display_list.append((x+shift, y, word, sup_font))
+                self.display_list.append((x+shift, y, word, font))
+            elif abbr:
+                y = baseline - font.metrics("ascent")
+                self.display_list.append((x+shift, y, word, font))
             else:
                 y = baseline - font.metrics("ascent")
                 self.display_list.append((x+shift, y, word, font))
@@ -215,6 +215,80 @@ class Layout:
         self.line = []
         max_descent = max([metric["descent"] for metric in metrics])
         self.cursor_y = baseline + 1.25 * max_descent
+
+    def text(self, tok):
+        font = get_font(self.size, self.weight, self.style)
+
+        for word in tok.text.split():
+            # cursor_x is now the x position of the next word
+            w = font.measure(word + " ")  # width of word + space
+            if self.cursor_x + w >= WIDTH - HSTEP:
+                if "\N{soft hyphen}" in word:
+                    combined = ""
+                    parts = word.split("\N{soft hyphen}")
+                    for part in parts:
+                        if self.cursor_x + font.measure(
+                                combined + part + "-") > WIDTH - HSTEP:
+                            # if this part doesn't fit on the line, flush current line + hyphen, without the current part
+                            self.line.append(
+                                (self.cursor_x, combined + "-", font, self.sup, self.abbr))
+                            self.flush()
+                            combined = ""
+                        combined += part
+                    if combined != "":
+                        # something is not flushed yet, add it to the line but don't flush
+                        self.line.append(
+                            (self.cursor_x, combined, font, self.sup, self.abbr))
+                        self.cursor_x += font.measure(combined + " ")
+                else:
+                    self.flush()
+            elif self.abbr:
+                run = word[0]
+                run_is_lower = word[0].islower()
+                for c in word[1:]:
+                    if c.islower() == run_is_lower and c != " ":
+                        run += c
+                    else:
+                        if run_is_lower:
+                            run = run.upper()
+                            abbr_font = get_font(
+                                self.size // 2, tkinter.font.BOLD, self.style)
+                            self.line.append(
+                                (self.cursor_x, run,
+                                    abbr_font, self.sup, self.abbr))
+                            self.cursor_x += font.measure(run)
+                        else:
+                            self.line.append(
+                                (self.cursor_x, run, font, self.sup, self.abbr))
+                            self.cursor_x += font.measure(run)
+
+                        run = c
+                        run_is_lower = c.islower()
+                if run != "":
+                    if run_is_lower:
+                        run = run.upper()
+                        abbr_font = get_font(self.size // 2,
+                                             tkinter.font.BOLD, self.style)
+                        self.line.append(
+                            (self.cursor_x, run, abbr_font, self.sup, self.abbr))
+                        self.cursor_x += abbr_font.measure(
+                            run) + font.measure(" ")
+                    else:
+                        self.line.append(
+                            (self.cursor_x, run.upper(),
+                                font, self.sup, self.abbr))
+                        self.cursor_x += font.measure(run + " ")
+
+            elif self.sup:
+                super_font = get_font(self.size // 2,
+                                      self.weight, self.style)
+                self.line.append(
+                    (self.cursor_x, word, super_font, self.sup, self.abbr))
+                self.cursor_x += super_font.measure(word + " ")
+            else:
+                self.line.append(
+                    (self.cursor_x, word, font, self.sup, self.abbr))
+                self.cursor_x += w
 
     def token(self, tok):
         if isinstance(tok, Text):
@@ -250,42 +324,10 @@ class Layout:
             self.sup = True
         elif tok.tag == "/sup":
             self.sup = False
-
-    def text(self, tok):
-        font = get_font(self.size, self.weight, self.style)
-
-        for word in tok.text.split():
-            # cursor_x is now the x position of the next word
-            # print(1)
-            w = font.measure(word + " ")  # width of word + space
-            if self.cursor_x + w >= WIDTH - HSTEP:
-                # print(2)
-                if "\N{soft hyphen}" in word:
-                    combined = ""
-                    parts = word.split("\N{soft hyphen}")
-                    for part in parts:
-                        if self.cursor_x + font.measure(
-                                combined + part + "-") > WIDTH - HSTEP:
-                            # if this part doesn't fit on the line, flush current line + hyphen, without the current part
-                            self.line.append(
-                                (self.cursor_x, combined + "-", font, self.sup))
-                            self.flush()
-                            combined = ""
-                        combined += part
-                    if combined != "":
-                        # something is not flushed yet, add it to the line but don't flush
-                        self.line.append(
-                            (self.cursor_x, combined, font, self.sup))
-                        self.cursor_x += font.measure(combined + " ")
-                else:
-                    self.flush()
-            else:
-                self.line.append((self.cursor_x, word, font, self.sup))
-                if self.sup:
-                    self.cursor_x += get_font(self.size // 2,
-                                              self.weight, self.style).measure(word + " ")
-                else:
-                    self.cursor_x += w
+        elif tok.tag == "abbr":
+            self.abbr = True
+        elif tok.tag == "/abbr":
+            self.abbr = False
 
 
 class Browser:
