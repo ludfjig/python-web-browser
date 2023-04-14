@@ -253,18 +253,39 @@ class Layout:
 
     def text(self, tok):
         font = get_font(self.size, self.weight, self.style)
-        for word in tok.text.split():
-            w = font.measure(word + " ")
-            # self.display_list.append((self.cursor_x, self.cursor_y, word, font))
-            self.line.append((self.cursor_x, word, font, self.sup))
-            if self.sup:
-                self.cursor_x += get_font(self.size // 2,
-                                          self.weight, self.style).measure(word + " ")
-            else:
-                self.cursor_x += w
 
-            if self.cursor_x >= WIDTH - HSTEP:
-                self.flush()
+        for word in tok.text.split():
+            # cursor_x is now the x position of the next word
+            # print(1)
+            w = font.measure(word + " ")  # width of word + space
+            if self.cursor_x + w >= WIDTH - HSTEP:
+                # print(2)
+                if "\N{soft hyphen}" in word:
+                    combined = ""
+                    parts = word.split("\N{soft hyphen}")
+                    for part in parts:
+                        if self.cursor_x + font.measure(
+                                combined + part + "-") > WIDTH - HSTEP:
+                            # if this part doesn't fit on the line, flush current line + hyphen, without the current part
+                            self.line.append(
+                                (self.cursor_x, combined + "-", font, self.sup))
+                            self.flush()
+                            combined = ""
+                        combined += part
+                    if combined != "":
+                        # something is not flushed yet, add it to the line but don't flush
+                        self.line.append(
+                            (self.cursor_x, combined, font, self.sup))
+                        self.cursor_x += font.measure(combined + " ")
+                else:
+                    self.flush()
+            else:
+                self.line.append((self.cursor_x, word, font, self.sup))
+                if self.sup:
+                    self.cursor_x += get_font(self.size // 2,
+                                              self.weight, self.style).measure(word + " ")
+                else:
+                    self.cursor_x += w
 
 
 class Browser:
