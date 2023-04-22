@@ -21,8 +21,11 @@ def request(url, headers={}, depth=0):
     assert scheme in ["http", "https", "file"], f"Unknown scheme {scheme}"
 
     # check cache
-    if (scheme in ["http", "https"] and original_url in cache
-            and time.time() < cache[original_url][0]):
+    if (
+        scheme in ["http", "https"]
+        and original_url in cache
+        and time.time() < cache[original_url][0]
+    ):
         return cache[original_url][1:]
 
     if scheme == "file":
@@ -49,9 +52,11 @@ def request(url, headers={}, depth=0):
         s = ctx.wrap_socket(s, server_hostname=host)
     s.connect((host, port))
 
-    request_headers = {"Host": host,
-                       "Connection": "close",
-                       "User-Agent": "TestBrowser"} | headers
+    request_headers = {
+        "Host": host,
+        "Connection": "close",
+        "User-Agent": "TestBrowser",
+    } | headers
     request_headers = {k.lower(): v for k, v in request_headers.items()}
 
     # construct request HTTP string
@@ -68,8 +73,7 @@ def request(url, headers={}, depth=0):
     statusline = response.readline()
     version, status, explanation = statusline.split(" ", 2)
     status = int(status)
-    assert status == 200 or 300 <= status <= 399, "{}: {}".format(
-        status, explanation)
+    assert status == 200 or 300 <= status <= 399, "{}: {}".format(status, explanation)
 
     # parse headers into dict
     response_headers = {}
@@ -97,8 +101,7 @@ def request(url, headers={}, depth=0):
     if "cache-control" in response_headers and status == 200:
         cache_control = response_headers["cache-control"]
         if cache_control != "no-store":
-            assert cache_control.startswith(
-                "max-age="), "Unknown cache-control"
+            assert cache_control.startswith("max-age="), "Unknown cache-control"
             age = int(cache_control.split("=", 1)[1])
             cache[original_url] = (time.time() + age, response_headers, body)
 
@@ -125,7 +128,7 @@ class Element:
         self.parent = parent
 
     def __repr__(self):
-        attrs = [" " + k + "=\"" + v + "\"" for k, v in self.attributes.items()]
+        attrs = [" " + k + '="' + v + '"' for k, v in self.attributes.items()]
         return "<" + self.tag + "".join(attrs) + ">"
 
 
@@ -145,18 +148,35 @@ class HTMLParser:
     def parse(self):
         text = ""
         in_tag = False
-        for c in self.body:
-            if c == "<":
-                in_tag = True
-                if text:
+        in_comment = False
+        i = 0
+        while i < len(self.body):
+            c = self.body[i]
+            if self.body[i:i+4] == "<!--":
+                if not in_tag and text:
                     self.add_text(text)
                 text = ""
-            elif c == ">":
-                in_tag = False
-                self.add_tag(text)
-                text = ""
-            else:
-                text += c
+                in_comment = True
+                i += 4
+                continue
+            elif self.body[i:i+3] == "-->":
+                in_comment = False
+                i += 3
+                continue
+            
+            if not in_comment:
+                if c == "<":
+                    in_tag = True
+                    if text:
+                        self.add_text(text)
+                    text = ""
+                elif c == ">":
+                    in_tag = False
+                    self.add_tag(text)
+                    text = ""
+                else:
+                    text += c
+            i += 1
         if not in_tag and text:
             self.add_text(text)
         return self.finish()
@@ -168,7 +188,7 @@ class HTMLParser:
         for attrpair in parts[1:]:
             if "=" in attrpair:
                 key, value = attrpair.split("=", 1)
-                if len(value) > 2 and value[0] in ["'", "\""]:
+                if len(value) > 2 and value[0] in ["'", '"']:
                     value = value[1:-1]
                 attributes[key.lower()] = value
             else:
@@ -209,14 +229,14 @@ class HTMLParser:
             open_tags = [node.tag for node in self.unfinished]
             if open_tags == [] and tag != "html":
                 self.add_tag("html")
-            elif open_tags == ["html"] \
-                    and tag not in ["head", "body", "/html"]:
+            elif open_tags == ["html"] and tag not in ["head", "body", "/html"]:
                 if tag in self.HEAD_TAGS:
                     self.add_tag("head")
                 else:
                     self.add_tag("body")
-            elif open_tags == ["html", "head"] and \
-                    tag not in ["/head"] + self.HEAD_TAGS:
+            elif (
+                open_tags == ["html", "head"] and tag not in ["/head"] + self.HEAD_TAGS
+            ):
                 self.add_tag("/head")
             else:
                 break
@@ -261,6 +281,7 @@ def get_font(size, weight, slant):
         font = tkinter.font.Font(size=size, weight=weight, slant=slant)
         FONTS[key] = font
     return FONTS[key]
+
 
 # mypy typechecker for python
 
@@ -363,12 +384,11 @@ class Browser:
     def draw(self):
         self.canvas.delete("all")
         for x, y, c, f in self.display_list:
-            if y > self.scroll+HEIGHT:
+            if y > self.scroll + HEIGHT:
                 continue
             if y + VSTEP < self.scroll:
                 continue
-            self.canvas.create_text(
-                x, y-self.scroll, text=c, font=f, anchor="nw")
+            self.canvas.create_text(x, y - self.scroll, text=c, font=f, anchor="nw")
 
     def load(self, url):
         headers, body = request(url)
