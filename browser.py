@@ -9,6 +9,10 @@ cache = {}
 timers = set()
 
 
+def p(m):
+    print(m, file=sys.stderr)
+
+
 def request(url, headers={}, depth=0):
     if depth > 10:
         raise Exception("Too many redirects")
@@ -73,7 +77,8 @@ def request(url, headers={}, depth=0):
     statusline = response.readline()
     version, status, explanation = statusline.split(" ", 2)
     status = int(status)
-    assert status == 200 or 300 <= status <= 399, "{}: {}".format(status, explanation)
+    assert status == 200 or 300 <= status <= 399, "{}: {}".format(
+        status, explanation)
 
     # parse headers into dict
     response_headers = {}
@@ -101,7 +106,8 @@ def request(url, headers={}, depth=0):
     if "cache-control" in response_headers and status == 200:
         cache_control = response_headers["cache-control"]
         if cache_control != "no-store":
-            assert cache_control.startswith("max-age="), "Unknown cache-control"
+            assert cache_control.startswith(
+                "max-age="), "Unknown cache-control"
             age = int(cache_control.split("=", 1)[1])
             cache[original_url] = (time.time() + age, response_headers, body)
 
@@ -163,7 +169,7 @@ class HTMLParser:
                 in_comment = False
                 i += 3
                 continue
-            
+
             if not in_comment:
                 if c == "<":
                     in_tag = True
@@ -220,9 +226,33 @@ class HTMLParser:
             node = Element(tag, attributes, parent)
             parent.children.append(node)
         else:
+            found = False
             parent = self.unfinished[-1] if self.unfinished else None
+
+            # check if there is unclosed paragraph tag
+            for unfinished in self.unfinished:
+                if isinstance(parent, Element) and unfinished.tag == "p":
+                    found = True
+                    break
+
+            # close all unclosed tags then reopen them
+            if found and tag == "p":
+                closed_tags = []
+                while True:
+                    node = self.unfinished.pop()
+                    parent2 = self.unfinished[-1]
+                    parent2.children.append(node)
+                    if isinstance(node, Element) and node.tag != "p":
+                        closed_tags.append(node)
+                    if isinstance(node, Element) and node.tag == "p":
+                        break
+
             node = Element(tag, attributes, parent)
             self.unfinished.append(node)
+            if found and tag == "p":
+                for closed in closed_tags:
+                    new = Element(closed.tag, closed.attributes, closed.parent)
+                    self.unfinished.append(new)
 
     def implicit_tags(self, tag):
         while True:
@@ -235,7 +265,8 @@ class HTMLParser:
                 else:
                     self.add_tag("body")
             elif (
-                open_tags == ["html", "head"] and tag not in ["/head"] + self.HEAD_TAGS
+                open_tags == ["html", "head"] and tag not in [
+                    "/head"] + self.HEAD_TAGS
             ):
                 self.add_tag("/head")
             else:
@@ -388,7 +419,8 @@ class Browser:
                 continue
             if y + VSTEP < self.scroll:
                 continue
-            self.canvas.create_text(x, y - self.scroll, text=c, font=f, anchor="nw")
+            self.canvas.create_text(
+                x, y - self.scroll, text=c, font=f, anchor="nw")
 
     def load(self, url):
         headers, body = request(url)
