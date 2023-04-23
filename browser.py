@@ -155,6 +155,7 @@ class HTMLParser:
         text = ""
         in_tag = False
         in_comment = False
+        in_script = False
         i = 0
         while i < len(self.body):
             c = self.body[i]
@@ -169,14 +170,25 @@ class HTMLParser:
                 in_comment = False
                 i += 3
                 continue
+            elif self.body[i:i+8] == "<script>" and not in_script:
+                in_script = True
+                i += 8
+                self.add_tag("script")
+                continue
+            elif self.body[i:i+9] == "</script>":
+                self.add_text(text)
+                text = ""
+                in_script = False
+                i += 9
+                continue
 
             if not in_comment:
-                if c == "<":
+                if c == "<" and not in_script:
                     in_tag = True
                     if text:
                         self.add_text(text)
                     text = ""
-                elif c == ">":
+                elif c == ">" and not in_script:
                     in_tag = False
                     self.add_tag(text)
                     text = ""
