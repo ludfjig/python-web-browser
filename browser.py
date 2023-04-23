@@ -209,8 +209,6 @@ class HTMLParser:
         return self.finish()
 
     def get_attributes(self, text):
-
-        p((text, len(text)))
         fake_parts = text.split()
         parts = fake_parts
         # if (fake_parts[0] != "div" or len(text) == 18):
@@ -220,7 +218,6 @@ class HTMLParser:
             split = fake_parts[1].rsplit("\"", 1)
             parts[1] = split[0] + "\""
             parts.append(split[1])
-            p((parts, fake_parts))
         tag = parts[0].lower()
         attributes = {}
         for attrpair in parts[1:]:
