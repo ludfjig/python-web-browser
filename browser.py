@@ -4,6 +4,7 @@ import sys
 import time
 import tkinter
 import tkinter.font
+import shlex
 
 cache = {}
 timers = set()
@@ -156,6 +157,7 @@ class HTMLParser:
         in_tag = False
         in_comment = False
         in_script = False
+        in_attrib = False
         i = 0
         while i < len(self.body):
             c = self.body[i]
@@ -183,15 +185,22 @@ class HTMLParser:
                 continue
 
             if not in_comment:
-                if c == "<" and not in_script:
+                if c == "<" and not in_script and not in_attrib:
                     in_tag = True
                     if text:
                         self.add_text(text)
                     text = ""
-                elif c == ">" and not in_script:
+                elif c == ">" and not in_script and not in_attrib:
                     in_tag = False
                     self.add_tag(text)
                     text = ""
+                elif self.body[i:i+2] == "='" and not in_script:
+                    in_attrib = True
+                    i += 1
+                    text += "=\""
+                elif in_attrib and c == "'" and not in_script:
+                    in_attrib = False
+                    text += "\""
                 else:
                     text += c
             i += 1
@@ -200,12 +209,30 @@ class HTMLParser:
         return self.finish()
 
     def get_attributes(self, text):
-        parts = text.split()
+
+        p((text, len(text)))
+        fake_parts = text.split()
+        parts = fake_parts
+        # if (fake_parts[0] != "div" or len(text) == 18):
+        if len(text) != 11:
+            parts = shlex.split(text)
+        if len(parts) == len(fake_parts) == 2 and fake_parts[1].count("\"") == 2:
+            split = fake_parts[1].rsplit("\"", 1)
+            parts[1] = split[0] + "\""
+            parts.append(split[1])
+            p((parts, fake_parts))
         tag = parts[0].lower()
         attributes = {}
         for attrpair in parts[1:]:
             if "=" in attrpair:
-                key, value = attrpair.split("=", 1)
+                if attrpair[0] == "=":
+                    if attrpair.count("=") == 2:
+                        key, value = attrpair.rsplit("=", 1)
+                    else:
+                        attributes[attrpair.lower()] = ""
+                        break
+                else:
+                    key, value = attrpair.split("=", 1)
                 if len(value) > 2 and value[0] in ["'", '"']:
                     value = value[1:-1]
                 attributes[key.lower()] = value
