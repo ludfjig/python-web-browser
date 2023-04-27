@@ -341,6 +341,7 @@ class InlineLayout:
         self.width = None
         self.height = None
         self.display_list = None
+        self.line_heights = []
 
     def layout(self):
         self.width = self.parent.width
@@ -384,6 +385,10 @@ class InlineLayout:
             self.size += 4
         elif tag == "br":
             self.flush()
+        elif tag == "li":
+            self.cursor_x += 2*HSTEP
+            self.x += 2*HSTEP
+            self.width -= 2*HSTEP
 
     def close_tag(self, tag):
         if tag == "i":
@@ -397,6 +402,10 @@ class InlineLayout:
         elif tag == "p":
             self.flush()
             self.cursor_y += VSTEP
+        # elif tag == "li":
+        #     self.cursor_x += 2*HSTEP
+        #     self.x += 2*HSTEP
+        #     self.width -= 2*HSTEP
 
     def text(self, node):
         font = get_font(self.size, self.weight, self.style)
@@ -420,6 +429,7 @@ class InlineLayout:
         self.line = []
         max_descent = max([metric["descent"] for metric in metrics])
         self.cursor_y = baseline + 1.25 * max_descent
+        self.line_heights.append(1.25*(max_ascent + max_descent))
 
     def paint(self, display_list):
         if isinstance(self.node, Element) and self.node.tag == "nav" and self.node.attributes.get(
@@ -427,6 +437,12 @@ class InlineLayout:
             x2, y2 = self.x + self.width, self.y + self.height
             rect = DrawRect(self.x, self.y, x2, y2, "lightgray")
             display_list.append(rect)
+        elif isinstance(self.node, Element) and self.node.tag == "li":
+
+            new_x = self.x - HSTEP - 2
+            new_y = self.y+self.line_heights[0]/2 - 2
+            bullet = DrawRect(new_x, new_y, new_x + 4, new_y + 4, "black")
+            display_list.append(bullet)
         elif isinstance(self.node, Element) and self.node.tag == "pre":
             x2, y2 = self.x + self.width, self.y + self.height
             rect = DrawRect(self.x, self.y, x2, y2, "gray")
