@@ -438,7 +438,6 @@ class InlineLayout:
             rect = DrawRect(self.x, self.y, x2, y2, "lightgray")
             display_list.append(rect)
         elif isinstance(self.node, Element) and self.node.tag == "li":
-
             new_x = self.x - HSTEP - 2
             new_y = self.y+self.line_heights[0]/2 - 2
             bullet = DrawRect(new_x, new_y, new_x + 4, new_y + 4, "black")
