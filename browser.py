@@ -508,6 +508,7 @@ class Browser:
         self.canvas.pack()
 
         self.window.bind("<Down>", self.scrolldown)
+        self.window.bind("<Up>", lambda e: self.scrolldown(e, up=-1))
 
         self.scroll = 0  # scroll amount
         self.bi_times = tkinter.font.Font(
@@ -517,8 +518,8 @@ class Browser:
             slant="italic",
         )
 
-    def scrolldown(self, event):
-        self.scroll += SCROLL_STEP
+    def scrolldown(self, event, up=1):
+        self.scroll += up*SCROLL_STEP
         self.draw()
 
     def draw(self):
