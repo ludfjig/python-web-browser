@@ -422,7 +422,12 @@ class InlineLayout:
         self.cursor_y = baseline + 1.25 * max_descent
 
     def paint(self, display_list):
-        if isinstance(self.node, Element) and self.node.tag == "pre":
+        if isinstance(self.node, Element) and self.node.tag == "nav" and self.node.attributes.get(
+                "class") == "links":
+            x2, y2 = self.x + self.width, self.y + self.height
+            rect = DrawRect(self.x, self.y, x2, y2, "lightgray")
+            display_list.append(rect)
+        elif isinstance(self.node, Element) and self.node.tag == "pre":
             x2, y2 = self.x + self.width, self.y + self.height
             rect = DrawRect(self.x, self.y, x2, y2, "gray")
             display_list.append(rect)
