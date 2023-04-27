@@ -4,9 +4,22 @@ import sys
 import time
 import tkinter
 import tkinter.font
+import shlex
 
 cache = {}
 timers = set()
+BLOCK_ELEMENTS = [
+    "html", "body", "article", "section", "nav", "aside",
+    "h1", "h2", "h3", "h4", "h5", "h6", "hgroup", "header",
+    "footer", "address", "p", "hr", "pre", "blockquote",
+    "ol", "ul", "menu", "li", "dl", "dt", "dd", "figure",
+    "figcaption", "main", "div", "table", "form", "fieldset",
+    "legend", "details", "summary"
+]
+
+
+def p(m):
+    print(m, file=sys.stderr)
 
 
 def request(url, headers={}, depth=0):
@@ -21,8 +34,11 @@ def request(url, headers={}, depth=0):
     assert scheme in ["http", "https", "file"], f"Unknown scheme {scheme}"
 
     # check cache
-    if (scheme in ["http", "https"] and original_url in cache
-            and time.time() < cache[original_url][0]):
+    if (
+        scheme in ["http", "https"]
+        and original_url in cache
+        and time.time() < cache[original_url][0]
+    ):
         return cache[original_url][1:]
 
     if scheme == "file":
@@ -49,9 +65,11 @@ def request(url, headers={}, depth=0):
         s = ctx.wrap_socket(s, server_hostname=host)
     s.connect((host, port))
 
-    request_headers = {"Host": host,
-                       "Connection": "close",
-                       "User-Agent": "TestBrowser"} | headers
+    request_headers = {
+        "Host": host,
+        "Connection": "close",
+        "User-Agent": "TestBrowser",
+    } | headers
     request_headers = {k.lower(): v for k, v in request_headers.items()}
 
     # construct request HTTP string
@@ -107,6 +125,20 @@ def request(url, headers={}, depth=0):
     return response_headers, body
 
 
+def layout_mode(node):
+    if isinstance(node, Text):
+        return "inline"
+    elif node.children:
+        for child in node.children:
+            if isinstance(child, Text):
+                continue
+            if child.tag in BLOCK_ELEMENTS:
+                return "block"
+        return "inline"
+    else:
+        return "block"
+
+
 class Text:
     def __init__(self, text, parent):
         self.text = text
@@ -125,7 +157,7 @@ class Element:
         self.parent = parent
 
     def __repr__(self):
-        attrs = [" " + k + "=\"" + v + "\"" for k, v in self.attributes.items()]
+        attrs = [" " + k + '="' + v + '"' for k, v in self.attributes.items()]
         return "<" + self.tag + "".join(attrs) + ">"
 
 
@@ -200,23 +232,48 @@ class HTMLParser:
             node = Element(tag, attributes, parent)
             parent.children.append(node)
         else:
+            found = False
             parent = self.unfinished[-1] if self.unfinished else None
+
+            # check if there is unclosed paragraph tag
+            for unfinished in self.unfinished:
+                if isinstance(parent, Element) and unfinished.tag == "p":
+                    found = True
+                    break
+
+            # close all unclosed tags then reopen them
+            if found and tag == "p":
+                closed_tags = []
+                while True:
+                    node = self.unfinished.pop()
+                    parent2 = self.unfinished[-1]
+                    parent2.children.append(node)
+                    if isinstance(node, Element) and node.tag != "p":
+                        closed_tags.append(node)
+                    if isinstance(node, Element) and node.tag == "p":
+                        break
+
             node = Element(tag, attributes, parent)
             self.unfinished.append(node)
+            if found and tag == "p":
+                for closed in closed_tags:
+                    new = Element(closed.tag, closed.attributes, closed.parent)
+                    self.unfinished.append(new)
 
     def implicit_tags(self, tag):
         while True:
             open_tags = [node.tag for node in self.unfinished]
             if open_tags == [] and tag != "html":
                 self.add_tag("html")
-            elif open_tags == ["html"] \
-                    and tag not in ["head", "body", "/html"]:
+            elif open_tags == ["html"] and tag not in ["head", "body", "/html"]:
                 if tag in self.HEAD_TAGS:
                     self.add_tag("head")
                 else:
                     self.add_tag("body")
-            elif open_tags == ["html", "head"] and \
-                    tag not in ["/head"] + self.HEAD_TAGS:
+            elif (
+                open_tags == ["html", "head"] and tag not in [
+                    "/head"] + self.HEAD_TAGS
+            ):
                 self.add_tag("/head")
             else:
                 break
@@ -262,30 +319,106 @@ def get_font(size, weight, slant):
         FONTS[key] = font
     return FONTS[key]
 
+
+class DocumentLayout:
+    def __init__(self, node):
+        self.node = node
+        self.parent = None
+        self.children = []
+
+    def layout(self):
+        child = BlockLayout(self.node, self, None)
+        self.children.append(child)
+        child.layout()
+
 # mypy typechecker for python
 
 
-class Layout:
-    def __init__(self, tree):
+class BlockLayout:
+    def __init__(self, node, parent, previous):
+        self.node = node
+        self.parent = parent
+        self.previous = previous
+        self.children = []
+        self.x = None
+        self.y = None
+        self.width = None
+        self.height = None
+
+    def layout(self):
+        previous = None
+        for child in self.node.children:
+            if layout_mode(child) == "inline":
+                next = InlineLayout(child, self, previous)
+            else:
+                next = BlockLayout(child, self, previous)
+            self.children.append(next)
+            previous = next
+
+        self.width = self.parent.width
+        self.x = self.parent.x
+
+        if self.previous:
+            self.y = self.previous.y + self.previous.height
+        else:
+            self.y = self.parent.y
+
+        for child in self.children:
+            child.layout()
+
+        self.height = sum([child.height for child in self.children])
+
+    def paint(self, display_list):
+        for child in self.children:
+            child.paint(display_list)
+
+    def __repr__(self):
+        return "BlockLayout(x={}, y={}, width={}, height={})".format(
+            self.x, self.y, self.width, self.height)
+
+
+class InlineLayout:
+    def __init__(self, node, parent, previous):
+        self.node = node
+        self.parent = parent
+        self.previous = previous
+        self.children = []
+        self.x = None
+        self.y = None
+        self.width = None
+        self.height = None
+        self.display_list = None
+
+    def layout(self):
+        self.width = self.parent.width
+        self.x = self.parent.x
+
+        if self.previous:
+            self.y = self.previous.y + self.previous.height
+        else:
+            self.y = self.parent.y
+
         self.display_list = []
-        self.cursor_x = HSTEP
-        self.cursor_y = VSTEP
         self.weight = "normal"
         self.style = "roman"
         self.size = 16
 
+        self.cursor_x = self.x
+        self.cursor_y = self.y
         self.line = []
-        self.recurse(tree)
+        self.recurse(self.node)
         self.flush()
 
-    def recurse(self, tree):
-        if isinstance(tree, Text):
-            self.text(tree)
+        self.height = self.cursor_y - self.y
+
+    def recurse(self, node):
+        if isinstance(node, Text):
+            self.text(node)
         else:
-            self.open_tag(tree.tag)
-            for child in tree.children:
+            self.open_tag(node.tag)
+            for child in node.children:
                 self.recurse(child)
-            self.close_tag(tree.tag)
+            self.close_tag(node.tag)
 
     def open_tag(self, tag):
         if tag == "i":
@@ -308,9 +441,18 @@ class Layout:
             self.size += 2
         elif tag == "big":
             self.size -= 4
-        elif tag == "br":
+        elif tag == "p":
             self.flush()
             self.cursor_y += VSTEP
+
+    def text(self, node):
+        font = get_font(self.size, self.weight, self.style)
+        for word in node.text.split():
+            w = font.measure(word)
+            if self.cursor_x + w > self.width - HSTEP:
+                self.flush()
+            self.line.append((self.cursor_x, word, font))
+            self.cursor_x += w + font.measure(" ")
 
     def flush(self):
         if not self.line:
@@ -321,59 +463,126 @@ class Layout:
         for x, word, font in self.line:
             y = baseline - font.metrics("ascent")
             self.display_list.append((x, y, word, font))
-
-        self.cursor_x = HSTEP
+        self.cursor_x = self.x
         self.line = []
         max_descent = max([metric["descent"] for metric in metrics])
         self.cursor_y = baseline + 1.25 * max_descent
 
-    def text(self, tok):
-        font = get_font(self.size, self.weight, self.style)
-        for word in tok.text.split():
-            w = font.measure(word + " ")
-            # self.display_list.append((self.cursor_x, self.cursor_y, word, font))
-            self.line.append((self.cursor_x, word, font))
-            self.cursor_x += w
-            if self.cursor_x >= WIDTH - HSTEP:
-                # self.cursor_y += font.metrics("linespace") * 1.25
-                # self.cursor_x = HSTEP
-                self.flush()
+    def paint(self, display_list):
+        if isinstance(self.node, Element) and self.node.tag == "pre":
+            x2, y2 = self.x + self.width, self.y + self.height
+            rect = DrawRect(self.x, self.y, x2, y2, "gray")
+            display_list.append(rect)
+        for x, y, word, font in self.display_list:
+            display_list.append(DrawText(x, y, word, font))
+
+    def __repr__(self):
+        return "InlineLayout(x={}, y={}, width={}, height={})".format(
+            self.x, self.y, self.width, self.height)
+
+
+class DocumentLayout:
+    def __init__(self, node):
+        self.node = node
+        self.parent = None
+        self.previous = None
+        self.children = []
+
+    def layout(self):
+        child = BlockLayout(self.node, self, None)
+        self.children.append(child)
+
+        self.width = WIDTH - 2*HSTEP
+        self.x = HSTEP
+        self.y = VSTEP
+        child.layout()
+        self.height = child.height + 2*VSTEP
+
+    def paint(self, display_list):
+        self.children[0].paint(display_list)
+
+    def __repr__(self):
+        return "DocumentLayout()"
+
+
+class DrawText:
+    def __init__(self, x1, y1, text, font):
+        self.top = y1
+        self.left = x1
+        self.text = text
+        self.font = font
+
+        self.bottom = y1 + font.metrics("linespace")
+
+    def execute(self, scroll, canvas):
+        canvas.create_text(
+            self.left, self.top - scroll,
+            text=self.text,
+            font=self.font,
+            anchor='nw',
+        )
+
+    def __repr__(self):
+        return "DrawText(top={} left={} bottom={} text={} font={})".format(
+            self.top, self.left, self.bottom, self.text, self.font)
+
+
+class DrawRect:
+    def __init__(self, x1, y1, x2, y2, color):
+        self.top = y1
+        self.left = x1
+        self.bottom = y2
+        self.right = x2
+        self.color = color
+
+    def execute(self, scroll, canvas):
+        canvas.create_rectangle(
+            self.left, self.top - scroll,
+            self.right, self.bottom - scroll,
+            width=0,
+            fill=self.color,
+        )
+
+    def __repr__(self):
+        return "DrawRect(top={} left={} bottom={} right={} color={})".format(
+            self.top, self.left, self.bottom, self.right, self.color)
 
 
 class Browser:
     def __init__(self):
         self.window = tkinter.Tk()
-        self.canvas = tkinter.Canvas(self.window, width=WIDTH, height=HEIGHT)
+        self.canvas = tkinter.Canvas(
+            self.window,
+            width=WIDTH,
+            height=HEIGHT
+        )
         self.canvas.pack()
 
+        self.scroll = 0
         self.window.bind("<Down>", self.scrolldown)
-
-        self.scroll = 0  # scroll amount
-        self.bi_times = tkinter.font.Font(
-            family="Times",
-            size=16,
-            weight="bold",
-            slant="italic",
-        )
+        self.display_list = []
 
     def scrolldown(self, event):
-        self.scroll += SCROLL_STEP
+        max_y = self.document.height - HEIGHT
+        self.scroll = min(self.scroll + SCROLL_STEP, max_y)
         self.draw()
 
     def draw(self):
         self.canvas.delete("all")
-        for x, y, c, f in self.display_list:
-            if y > self.scroll+HEIGHT:
+        for cmd in self.display_list:
+            if cmd.top > self.scroll + HEIGHT:
                 continue
-            if y + VSTEP < self.scroll:
+            if cmd.bottom < self.scroll:
                 continue
-            self.canvas.create_text(
-                x, y-self.scroll, text=c, font=f, anchor="nw")
+            cmd.execute(self.scroll, self.canvas)
 
     def load(self, url):
         headers, body = request(url)
         self.nodes = HTMLParser(body).parse()
-        self.display_list = Layout(self.nodes).display_list
+        self.document = DocumentLayout(self.nodes)
+        self.document.layout()
+        self.display_list = []
+        self.document.paint(self.display_list)
         self.draw()
 
 
