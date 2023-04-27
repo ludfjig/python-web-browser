@@ -553,6 +553,18 @@ class Browser:
                 continue
             cmd.execute(self.scroll, self.canvas)
 
+        # scroll bar
+        x1 = WIDTH - 8
+        x2 = WIDTH
+
+        bar_height = HEIGHT * HEIGHT / self.document.height
+
+        y1 = self.scroll / self.document.height * HEIGHT
+        y2 = y1 + bar_height
+
+        bar = DrawRect(x1, y1, x2, y2, "blue")
+        bar.execute(0, self.canvas)
+
     def load(self, url):
         headers, body = request(url)
         self.nodes = HTMLParser(body).parse()
