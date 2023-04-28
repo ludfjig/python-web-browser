@@ -541,7 +541,8 @@ class Browser:
         )
 
     def scrolldown(self, event, up=1):
-        self.scroll += up*SCROLL_STEP
+        max_y = self.document.height - HEIGHT
+        self.scroll = min(self.scroll + SCROLL_STEP*up, max_y)
         self.draw()
 
     def draw(self):
@@ -562,8 +563,9 @@ class Browser:
         y1 = self.scroll / self.document.height * HEIGHT
         y2 = y1 + bar_height
 
-        bar = DrawRect(x1, y1, x2, y2, "blue")
-        bar.execute(0, self.canvas)
+        if bar_height < HEIGHT:
+            bar = DrawRect(x1, y1, x2, y2, "blue")
+            bar.execute(0, self.canvas)
 
     def load(self, url):
         headers, body = request(url)
