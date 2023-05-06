@@ -339,10 +339,11 @@ SCROLL_STEP = 100
 FONTS = {}
 
 
-def get_font(size, weight, slant):
-    key = (size, weight, slant)
+def get_font(size, weight, slant, family):
+    key = (size, weight, slant, family)
     if key not in FONTS:
-        font = tkinter.font.Font(size=size, weight=weight, slant=slant)
+        font = tkinter.font.Font(
+            size=size, weight=weight, slant=slant, family=family)
         FONTS[key] = font
     return FONTS[key]
 
@@ -382,7 +383,9 @@ class BlockLayout:
             self.children.append(next)
             previous = next
 
-        self.width = self.parent.width
+        self.width = self.parent.width if self.node.style.get(
+            "width", "auto") == "auto" else float(
+            self.node.style["width"])
         self.x = self.parent.x
 
         if self.previous:
@@ -393,7 +396,10 @@ class BlockLayout:
         for child in self.children:
             child.layout()
 
-        self.height = sum([child.height for child in self.children])
+        if self.node.style.get("height", "auto") == "auto":
+            self.height = sum([child.height for child in self.children])
+        else:
+            self.height = float(self.node.style["height"])
 
     def paint(self, display_list):
         bgcolor = self.node.style.get("background-color",
@@ -425,13 +431,16 @@ class InlineLayout:
     def get_font(self, node):
         weight = node.style["font-weight"]
         style = node.style["font-style"]
+        family = node.style["font-family"]
         if style == "normal":
             style = "roman"
         size = int(float(node.style["font-size"][:-2]) * .75)
-        return get_font(size, weight, style)
+        return get_font(size, weight, style, family)
 
     def layout(self):
-        self.width = self.parent.width
+        self.width = self.parent.width if self.node.style.get(
+            "width", "auto") == "auto" else float(
+            self.node.style["width"])
         self.x = self.parent.x
 
         if self.previous:
@@ -450,7 +459,9 @@ class InlineLayout:
         self.recurse(self.node)
         self.flush()
 
-        self.height = self.cursor_y - self.y
+        self.height = self.cursor_y - self.y if self.node.style.get(
+            "height", "auto") == "auto" else float(
+            self.node.style["height"])
 
     def recurse(self, node):
         if isinstance(node, Text):
@@ -491,7 +502,7 @@ class InlineLayout:
         font = self.get_font(node)
         for word in node.text.split():
             w = font.measure(word)
-            if self.cursor_x + w > self.width - HSTEP:
+            if self.cursor_x + w > self.width:
                 self.flush()
             self.line.append((self.cursor_x, word, font, color))
             self.cursor_x += w + font.measure(" ")
@@ -629,6 +640,7 @@ INHERITED_PROPERTIES = {
     "font-style": "normal",
     "font-weight": "normal",
     "color": "black",
+    "font-family": "Times",
 }
 
 
@@ -646,12 +658,20 @@ def compute_style(node, property, value):
             return str(node_pct * parent_px) + "px"
         else:
             return None
+    elif property in ["width", "height"]:
+        if value.endswith("px"):
+            if value.startswith("-"):
+                return "auto"
+            return value[:-2]
+        else:
+            return value
     else:
         return value
 
 
 def style(node, rules):
     node.style = {}
+
     for property, default_value in INHERITED_PROPERTIES.items():
         if node.parent:
             node.style[property] = node.parent.style[property]
