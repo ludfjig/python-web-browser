@@ -635,6 +635,22 @@ class DescendantSelector:
             .format(self.ancestor, self.descendant, self.priority)
 
 
+class ClassSelector:
+    def __init__(self, html_class, priority=10):
+        self.html_class = html_class
+        self.priority = priority
+
+    def matches(self, node):
+        if not isinstance(node, Element):
+            return False
+        classes = node.attributes.get("class", "").split()
+        return self.html_class in classes
+
+    def __repr__(self):
+        return "ClassSelector(html_class={}, priority={})".format(
+            self.html_class, self.priority)
+
+
 INHERITED_PROPERTIES = {
     "font-size": "16px",
     "font-style": "normal",
@@ -727,8 +743,17 @@ class CSSParser:
         self.whitespace()
         self.literal(":")
         self.whitespace()
+        if prop.lower() == "font":
+            style = self.word()
+            self.whitespace()
+            weight = self.word()
+            self.whitespace()
+            size = self.word()
+            self.whitespace()
+            family = self.word()
+            return [("font-family", family), ("font-weight", weight), ("font-size", size), ("font-style", style)]
         val = self.word()
-        return prop.lower(), val
+        return [(prop.lower(), val)]
 
     def ignore_until(self, chars):
         while self.i < len(self.s):
@@ -741,8 +766,10 @@ class CSSParser:
         pairs = {}
         while self.i < len(self.s) and self.s[self.i] != "}":
             try:
-                prop, val = self.pair()
-                pairs[prop.lower()] = val
+                vals = self.pair()
+                for pair in vals:
+                    k, v = pair
+                    pairs[k.lower()] = v
                 self.whitespace()
                 self.literal(";")
                 self.whitespace()
@@ -756,11 +783,19 @@ class CSSParser:
         return pairs
 
     def selector(self):
-        out = TagSelector(self.word().lower())
+        out = None
+        word = self.word()
+        if word.startswith("."):
+            out = ClassSelector(word[1:])
+        else:
+            out = TagSelector(word.lower())
         self.whitespace()
         while self.i < len(self.s) and self.s[self.i] != "{":
             tag = self.word()
-            descendant = TagSelector(tag.lower())
+            if tag.startswith("."):
+                descendant = ClassSelector(tag[1:])
+            else:
+                descendant = TagSelector(tag.lower())
             out = DescendantSelector(out, descendant)
             self.whitespace()
         return out
