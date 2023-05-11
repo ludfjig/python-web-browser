@@ -334,7 +334,7 @@ def show(body):
 
 WIDTH, HEIGHT = 800, 600
 HSTEP, VSTEP = 13, 18
-DEFAULT_FILE_URL = "file://browser.py"
+DEFAULT_FILE_URL = "https://browser.engineering/"  # "file://browser.py"
 SCROLL_STEP = 100
 FONTS = {}
 
@@ -710,8 +710,11 @@ class Browser:
 
         self.window.bind("<Down>", self.handle_down)
         self.window.bind("<Button-1>", self.handle_click)
+        self.window.bind("<Button-2>", self.handle_middle_click)
+        self.window.bind("<Button-3>", self.handle_middle_click)
         self.window.bind("<Key>", self.handle_key)
         self.window.bind("<Return>", self.handle_enter)
+        self.window.bind("<BackSpace>", self.handle_backspace)
 
         self.tabs = []
         self.active_tab = None
@@ -722,9 +725,9 @@ class Browser:
         self.tabs[self.active_tab].scrolldown()
         self.draw()
 
-    def handle_click(self, e):
+    def handle_click(self, e, middle=False):
         self.focus = None
-        if e.y < CHROME_PX:
+        if e.y < CHROME_PX and not middle:
             if 40 <= e.x < 40 + 80 * len(self.tabs) and 0 <= e.y < 40:
                 self.active_tab = int((e.x - 40) / 80)
             elif 10 <= e.x < 30 and 10 <= e.y < 30:
@@ -735,8 +738,17 @@ class Browser:
                 self.focus = "address bar"
                 self.address_bar = ""
         else:
-            self.tabs[self.active_tab].click(e.x, e.y - CHROME_PX)
-        self.draw()
+            url = self.tabs[self.active_tab].click(e.x, e.y - CHROME_PX, middle=middle)
+            if url is not None:
+                new_tab = Tab()
+                new_tab.load(url)
+                # self.active_tab = len(self.tabs)
+                self.tabs.append(new_tab)
+                self.draw()
+                # self.draw()
+
+    def handle_middle_click(self, e):
+        self.handle_click(e, middle=True)
 
     def handle_key(self, e):
         if len(e.char) == 0:
@@ -745,6 +757,11 @@ class Browser:
             return
         if self.focus == "address bar":
             self.address_bar += e.char
+            self.draw()
+
+    def handle_backspace(self, e):
+        if self.focus == "address bar":
+            self.address_bar = self.address_bar[:-1]
             self.draw()
 
     def handle_enter(self, e):
@@ -941,7 +958,7 @@ class Tab:
         max_y = self.document.height - (HEIGHT - CHROME_PX)
         self.scroll = min(self.scroll + SCROLL_STEP, max_y)
 
-    def click(self, x, y):
+    def click(self, x, y, middle=False):
         y += self.scroll
         objs = [obj for obj in tree_to_list(self.document, [])
                 if obj.x <= x < obj.x + obj.width
@@ -954,6 +971,8 @@ class Tab:
                 pass
             elif elt.tag == "a" and "href" in elt.attributes:
                 url = resolve_url(elt.attributes["href"], self.url)
+                if (middle):
+                    return url
                 return self.load(url)
             elt = elt.parent
 
