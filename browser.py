@@ -6,7 +6,6 @@ import tkinter
 import tkinter.font
 import shlex
 
-cache = {}
 timers = set()
 BLOCK_ELEMENTS = [
     "html", "body", "article", "section", "nav", "aside",
@@ -53,20 +52,18 @@ def request(url, headers={}, depth=0):
     if depth > 10:
         raise Exception("Too many redirects")
 
+    if url == "about:bookmarks":
+        string = "<!doctype html>\n"
+        for b in BOOKMARKS:
+            string += f"<a href=\"{b}\">{b}</a><br>\n"
+        return {}, string
+
     # save original url
     original_url = url
 
     # format request
     scheme, url = url.split("://", 1)
     assert scheme in ["http", "https", "file"], f"Unknown scheme {scheme}"
-
-    # check cache
-    if (
-        scheme in ["http", "https"]
-        and original_url in cache
-        and time.time() < cache[original_url][0]
-    ):
-        return cache[original_url][1:]
 
     if scheme == "file":
         f = open(url)
@@ -125,8 +122,8 @@ def request(url, headers={}, depth=0):
         header, value = line.split(":", 1)
         response_headers[header.lower()] = value.strip()
 
-    assert "transfer-encoding" not in response_headers
-    assert "content-encoding" not in response_headers
+    # assert "transfer-encoding" not in response_headers
+    # assert "content-encoding" not in response_headers
 
     # follow redirects
     if 300 <= status <= 399:
@@ -137,15 +134,6 @@ def request(url, headers={}, depth=0):
 
     # read body
     body = response.read()
-
-    # cache response
-    if "cache-control" in response_headers and status == 200:
-        cache_control = response_headers["cache-control"]
-        if cache_control != "no-store":
-            assert cache_control.startswith(
-                "max-age="), "Unknown cache-control"
-            age = int(cache_control.split("=", 1)[1])
-            cache[original_url] = (time.time() + age, response_headers, body)
 
     s.close()
 
@@ -697,6 +685,9 @@ class CSSParser:
         return rules
 
 
+BOOKMARKS = []
+
+
 class Browser:
     def __init__(self):
         self.window = tkinter.Tk()
@@ -734,18 +725,24 @@ class Browser:
                 self.load("https://browser.engineering/")
             elif 10 <= e.x < 35 and 50 <= e.y < 90:
                 self.tabs[self.active_tab].go_back()
-            elif 50 <= e.x < WIDTH - 10 and 50 <= e.y < 90:
+            elif 50 <= e.x < WIDTH - 40 and 50 <= e.y < 90:
                 self.focus = "address bar"
                 self.address_bar = ""
+            elif WIDTH - 35 <= e.x < WIDTH - 10 and 50 <= e.y < 90:
+                if self.tabs[self.active_tab].url in BOOKMARKS:
+                    BOOKMARKS.remove(self.tabs[self.active_tab].url)
+                else:
+                    BOOKMARKS.append(self.tabs[self.active_tab].url)
         else:
-            url = self.tabs[self.active_tab].click(e.x, e.y - CHROME_PX, middle=middle)
+            url = self.tabs[self.active_tab].click(
+                e.x, e.y - CHROME_PX, middle=middle)
             if url is not None:
                 new_tab = Tab()
                 new_tab.load(url)
                 # self.active_tab = len(self.tabs)
                 self.tabs.append(new_tab)
-                self.draw()
-                # self.draw()
+        self.draw()
+        # self.draw()
 
     def handle_middle_click(self, e):
         self.handle_click(e, middle=True)
@@ -801,8 +798,11 @@ class Browser:
         self.canvas.create_text(11, 0, anchor="nw", text="+",
                                 font=buttonfont, fill="black")
 
-        self.canvas.create_rectangle(40, 50, WIDTH - 10, 90,
+        self.canvas.create_rectangle(40, 50, WIDTH - 40, 90,
                                      outline="black", width=1)
+
+        url = self.tabs[self.active_tab].url
+
         if self.focus == "address bar":
             self.canvas.create_text(
                 55, 55, anchor='nw', text=self.address_bar,
@@ -810,7 +810,6 @@ class Browser:
             w = buttonfont.measure(self.address_bar)
             self.canvas.create_line(55 + w, 55, 55 + w, 85, fill="black")
         else:
-            url = self.tabs[self.active_tab].url
             self.canvas.create_text(55, 55, anchor='nw', text=url,
                                     font=buttonfont, fill="black")
 
@@ -818,6 +817,11 @@ class Browser:
                                      outline="black", width=1)
         self.canvas.create_polygon(
             15, 70, 30, 55, 30, 85, fill='black')
+
+        # bookmark
+        color = "white" if url not in BOOKMARKS else "yellow"
+        self.canvas.create_rectangle(
+            WIDTH - 35, 50, WIDTH - 10, 90, fill=color, outline="black", width=1)
 
 
 class LineLayout:
@@ -919,32 +923,51 @@ class Tab:
         with open("browser.css") as f:
             self.default_style_sheet = CSSParser(f.read()).parse()
 
-    def load(self, url):
-        headers, body = request(url)
-        self.scroll = 0
-        self.url = url
-        self.history.append(url)
-        self.nodes = HTMLParser(body).parse()
+    def load(self, url, scroll=False):
+        first, fragment = url, None
+        if "#" in url:
+            first, fragment = url.split("#", 1)
+        if scroll is False:
 
-        rules = self.default_style_sheet.copy()
-        links = [node.attributes["href"]
-                 for node in tree_to_list(self.nodes, [])
-                 if isinstance(node, Element)
-                 and node.tag == "link"
-                 and "href" in node.attributes
-                 and node.attributes.get("rel") == "stylesheet"]
-        for link in links:
-            try:
-                header, body = request(resolve_url(link, url))
-            except:
-                continue
-            rules.extend(CSSParser(body).parse())
-        style(self.nodes, sorted(rules, key=cascade_priority))
+            headers, body = request(first)
 
-        self.document = DocumentLayout(self.nodes)
-        self.document.layout()
-        self.display_list = []
-        self.document.paint(self.display_list)
+            self.scroll = 0
+
+            self.url = url
+            self.history.append(url)
+            self.nodes = HTMLParser(body).parse()
+
+            rules = self.default_style_sheet.copy()
+            links = [node.attributes["href"]
+                     for node in tree_to_list(self.nodes, [])
+                     if isinstance(node, Element)
+                     and node.tag == "link"
+                     and "href" in node.attributes
+                     and node.attributes.get("rel") == "stylesheet"]
+            for link in links:
+                try:
+                    header, body = request(resolve_url(link, url))
+                except:
+                    continue
+                rules.extend(CSSParser(body).parse())
+            style(self.nodes, sorted(rules, key=cascade_priority))
+
+            self.document = DocumentLayout(self.nodes)
+            self.document.layout()
+            self.display_list = []
+            self.document.paint(self.display_list)
+        else:
+            self.url = self.url.split("#", 1)[0] + "#" + fragment
+
+        styled_nodes = []
+        tree_to_list(self.document, styled_nodes)
+
+        if fragment is not None:
+            for node in styled_nodes:
+                if (isinstance(node, BlockLayout) and isinstance(node.node, Element)
+                        and node.node.attributes.get("id") == fragment):
+                    self.scroll = node.y
+                    break
 
     def draw(self, canvas):
         for cmd in self.display_list:
@@ -973,6 +996,14 @@ class Tab:
                 url = resolve_url(elt.attributes["href"], self.url)
                 if (middle):
                     return url
+                if elt.attributes["href"][0] == "#":
+                    if "#" in url:
+                        a, b = url.split("#", 1)
+                        return self.load(
+                            a + elt.attributes["href"],
+                            scroll=True)
+                    return self.load(url + elt.attributes["href"], scroll=True)
+
                 return self.load(url)
             elt = elt.parent
 
