@@ -5,6 +5,8 @@ import time
 import tkinter
 import tkinter.font
 import shlex
+import urllib.parse
+
 
 cache = {}
 timers = set()
@@ -49,107 +51,64 @@ def tree_to_list(tree, list):
     return list
 
 
-def request(url, headers={}, depth=0):
-    if depth > 10:
-        raise Exception("Too many redirects")
-
-    # save original url
-    original_url = url
-
-    # format request
+def request(url, payload=None):
     scheme, url = url.split("://", 1)
-    assert scheme in ["http", "https", "file"], f"Unknown scheme {scheme}"
+    assert scheme in ["http", "https"], \
+        "Unknown scheme {}".format(scheme)
 
-    # check cache
-    if (
-        scheme in ["http", "https"]
-        and original_url in cache
-        and time.time() < cache[original_url][0]
-    ):
-        return cache[original_url][1:]
-
-    if scheme == "file":
-        f = open(url)
-        body = f.read()
-        return {}, body
-
-    if "/" in url:
+    if ("/" in url):
         host, path = url.split("/", 1)
         path = "/" + path
     else:
         host = url
-        path = "/"
+        path = '/'
     port = 80 if scheme == "http" else 443
 
     if ":" in host:
         host, port = host.split(":", 1)
         port = int(port)
 
-    # create socket
-    s = socket.socket()
+    s = socket.socket(
+        family=socket.AF_INET,
+        type=socket.SOCK_STREAM,
+        proto=socket.IPPROTO_TCP,
+    )
+    s.connect((host, port))
+
     if scheme == "https":
         ctx = ssl.create_default_context()
         s = ctx.wrap_socket(s, server_hostname=host)
-    s.connect((host, port))
 
-    request_headers = {
-        "Host": host,
-        "Connection": "close",
-        "User-Agent": "TestBrowser",
-    } | headers
-    request_headers = {k.lower(): v for k, v in request_headers.items()}
+    method = "POST" if payload else "GET"
 
-    # construct request HTTP string
-    request_string = f"GET {path} HTTP/1.1\r\n"
-    for header, value in request_headers.items():
-        request_string += f"{header}: {value}\r\n"
-    request_string += "\r\n"
-
-    # send request
-    s.send(request_string.encode("utf8"))
-
-    # read response
+    body = "{} {} HTTP/1.0\r\n".format(method, path)
+    if payload:
+        length = len(payload.encode("utf8"))
+        body += "Content-Length: {}\r\n".format(length)
+    body += "Host: {}\r\n".format(host)
+    body += "\r\n" + (payload if payload else "")
+    s.send(body.encode("utf8"))
     response = s.makefile("r", encoding="utf8", newline="\r\n")
+
     statusline = response.readline()
     version, status, explanation = statusline.split(" ", 2)
-    status = int(status)
-    assert status == 200 or 300 <= status <= 399, "{}: {}".format(
-        status, explanation)
+    assert status == "200", "{}: {}".format(status, explanation)
 
-    # parse headers into dict
-    response_headers = {}
+    headers = {}
     while True:
         line = response.readline()
         if line == "\r\n":
             break
         header, value = line.split(":", 1)
-        response_headers[header.lower()] = value.strip()
+        headers[header.lower()] = value.strip()
 
-    assert "transfer-encoding" not in response_headers
-    assert "content-encoding" not in response_headers
+    assert "transfer-encoding" not in headers
+    assert "content-encoding" not in headers
 
-    # follow redirects
-    if 300 <= status <= 399:
-        location = response_headers["location"]
-        if location.startswith("/"):
-            location = scheme + "://" + host + location
-        return request(location, depth=depth + 1)
-
-    # read body
     body = response.read()
-
-    # cache response
-    if "cache-control" in response_headers and status == 200:
-        cache_control = response_headers["cache-control"]
-        if cache_control != "no-store":
-            assert cache_control.startswith(
-                "max-age="), "Unknown cache-control"
-            age = int(cache_control.split("=", 1)[1])
-            cache[original_url] = (time.time() + age, response_headers, body)
-
     s.close()
 
-    return response_headers, body
+    return headers, body
 
 
 def layout_mode(node):
@@ -161,6 +120,8 @@ def layout_mode(node):
                 continue
             if child.tag in BLOCK_ELEMENTS:
                 return "block"
+        return "inline"
+    elif node.tag == "input":
         return "inline"
     else:
         return "block"
@@ -373,7 +334,6 @@ class BlockLayout:
         self.height = None
 
     def layout(self):
-
         self.width = self.parent.width
         self.x = self.parent.x
 
@@ -404,8 +364,11 @@ class BlockLayout:
         else:
             if node.tag == "br":
                 self.new_line()
-            for child in node.children:
-                self.recurse(child)
+            elif node.tag == "input" or node.tag == "button":
+                self.input(node)
+            else:
+                for child in node.children:
+                    self.recurse(child)
 
     def new_line(self):
         self.previous_word = None
@@ -434,13 +397,29 @@ class BlockLayout:
             self.previous_word = text
             self.cursor_x += w + font.measure(" ")
 
+    def input(self, node):
+        w = INPUT_WIDTH_PX
+        if self.cursor_x + w > self.width:
+            self.new_line()
+        line = self.children[-1]
+        input = InputLayout(node, line, self.previous_word)
+        line.children.append(input)
+        self.previous_word = input
+        font = self.get_font(node)
+        self.cursor_x += w + font.measure(" ")
+
     def paint(self, display_list):
         bgcolor = self.node.style.get("background-color",
                                       "transparent")
-        if bgcolor != "transparent":
-            x2, y2 = self.x + self.width, self.y + self.height
-            rect = DrawRect(self.x, self.y, x2, y2, bgcolor)
-            display_list.append(rect)
+
+        is_atomic = not isinstance(self.node, Text) and \
+            (self.node.tag == "input" or self.node.tag == "button")
+
+        if not is_atomic:
+            if bgcolor != "transparent":
+                x2, y2 = self.x + self.width, self.y + self.height
+                rect = DrawRect(self.x, self.y, x2, y2, bgcolor)
+                display_list.append(rect)
 
         for child in self.children:
             child.paint(display_list)
@@ -723,8 +702,8 @@ class Browser:
         self.draw()
 
     def handle_click(self, e):
-        self.focus = None
         if e.y < CHROME_PX:
+            self.focus = None
             if 40 <= e.x < 40 + 80 * len(self.tabs) and 0 <= e.y < 40:
                 self.active_tab = int((e.x - 40) / 80)
             elif 10 <= e.x < 30 and 10 <= e.y < 30:
@@ -735,6 +714,7 @@ class Browser:
                 self.focus = "address bar"
                 self.address_bar = ""
         else:
+            self.focus = "content"
             self.tabs[self.active_tab].click(e.x, e.y - CHROME_PX)
         self.draw()
 
@@ -745,6 +725,9 @@ class Browser:
             return
         if self.focus == "address bar":
             self.address_bar += e.char
+            self.draw()
+        elif self.focus == "content":
+            self.tabs[self.active_tab].keypress(e.char)
             self.draw()
 
     def handle_enter(self, e):
@@ -896,20 +879,21 @@ CHROME_PX = 100
 
 class Tab:
     def __init__(self):
-        self.url = None
         self.history = []
+        self.focus = None
+        self.url = None
 
         with open("browser.css") as f:
             self.default_style_sheet = CSSParser(f.read()).parse()
 
-    def load(self, url):
-        headers, body = request(url)
+    def load(self, url, body=None):
         self.scroll = 0
         self.url = url
         self.history.append(url)
+        headers, body = request(url, body)
         self.nodes = HTMLParser(body).parse()
 
-        rules = self.default_style_sheet.copy()
+        self.rules = self.default_style_sheet.copy()
         links = [node.attributes["href"]
                  for node in tree_to_list(self.nodes, [])
                  if isinstance(node, Element)
@@ -918,12 +902,14 @@ class Tab:
                  and node.attributes.get("rel") == "stylesheet"]
         for link in links:
             try:
-                header, body = request(resolve_url(link, url))
+                header, body = request(resolve_url(link, self.url))
             except:
                 continue
-            rules.extend(CSSParser(body).parse())
-        style(self.nodes, sorted(rules, key=cascade_priority))
+            self.rules.extend(CSSParser(body).parse())
+        self.render()
 
+    def render(self):
+        style(self.nodes, sorted(self.rules, key=cascade_priority))
         self.document = DocumentLayout(self.nodes)
         self.document.layout()
         self.display_list = []
@@ -937,11 +923,21 @@ class Tab:
                 continue
             cmd.execute(self.scroll - CHROME_PX, canvas)
 
+        if self.focus:
+            obj = [obj for obj in tree_to_list(self.document, [])
+                   if obj.node == self.focus and
+                   isinstance(obj, InputLayout)][0]
+            text = self.focus.attributes.get("value", "")
+            x = obj.x + obj.font.measure(text)
+            y = obj.y - self.scroll + CHROME_PX
+            canvas.create_line(x, y, x, y + obj.height)
+
     def scrolldown(self):
         max_y = self.document.height - (HEIGHT - CHROME_PX)
         self.scroll = min(self.scroll + SCROLL_STEP, max_y)
 
     def click(self, x, y):
+        self.focus = None
         y += self.scroll
         objs = [obj for obj in tree_to_list(self.document, [])
                 if obj.x <= x < obj.x + obj.width
@@ -955,7 +951,39 @@ class Tab:
             elif elt.tag == "a" and "href" in elt.attributes:
                 url = resolve_url(elt.attributes["href"], self.url)
                 return self.load(url)
+            elif elt.tag == "input":
+                elt.attributes["value"] = ""
+                self.focus = elt
+                return self.render()
+            elif elt.tag == "button":
+                while elt:
+                    if elt.tag == "form" and "action" in elt.attributes:
+                        return self.submit_form(elt)
+                    elt = elt.parent
             elt = elt.parent
+
+    def submit_form(self, elt):
+        inputs = [node for node in tree_to_list(elt, [])
+                  if isinstance(node, Element)
+                  and node.tag == "input"
+                  and "name" in node.attributes]
+
+        body = ""
+        for input in inputs:
+            name = input.attributes["name"]
+            value = input.attributes.get("value", "")
+            name = urllib.parse.quote(name)
+            value = urllib.parse.quote(value)
+            body += "&" + name + "=" + value
+        body = body[1:]
+
+        url = resolve_url(elt.attributes["action"], self.url)
+        self.load(url, body)
+
+    def keypress(self, char):
+        if self.focus:
+            self.focus.attributes["value"] += char
+            self.render()
 
     def go_back(self):
         if len(self.history) > 1:
@@ -965,6 +993,69 @@ class Tab:
 
     def __repr__(self):
         return "Tab(history={})".format(self.history)
+
+
+INPUT_WIDTH_PX = 200
+
+
+class InputLayout:
+    def __init__(self, node, parent, previous):
+        self.node = node
+        self.children = []
+        self.parent = parent
+        self.previous = previous
+        self.x = None
+        self.y = None
+        self.width = None
+        self.height = None
+
+    def layout(self):
+        weight = self.node.style["font-weight"]
+        style = self.node.style["font-style"]
+        if style == "normal":
+            style = "roman"
+        size = int(float(self.node.style["font-size"][:-2]) * .75)
+        self.font = get_font(size, weight, style)
+
+        self.width = INPUT_WIDTH_PX
+
+        if self.previous:
+            space = self.previous.font.measure(" ")
+            self.x = self.previous.x + space + self.previous.width
+        else:
+            self.x = self.parent.x
+
+        self.height = self.font.metrics("linespace")
+
+    def paint(self, display_list):
+        bgcolor = self.node.style.get("background-color",
+                                      "transparent")
+        if bgcolor != "transparent":
+            x2, y2 = self.x + self.width, self.y + self.height
+            rect = DrawRect(self.x, self.y, x2, y2, bgcolor)
+            display_list.append(rect)
+
+        if self.node.tag == "input":
+            text = self.node.attributes.get("value", "")
+        elif self.node.tag == "button":
+            if len(self.node.children) == 1 and \
+               isinstance(self.node.children[0], Text):
+                text = self.node.children[0].text
+            else:
+                print("Ignoring HTML contents inside button")
+                text = ""
+
+        color = self.node.style["color"]
+        display_list.append(
+            DrawText(self.x, self.y, text, self.font, color))
+
+    def __repr__(self):
+        # if self.node.tag == "input":
+        #     extra = "type=input"
+        # else:
+        #     extra = "type=button text={}".format(self.node.children[0].text)
+        return "InputLayout(x={}, y={}, width={}, height={})".format(
+            self.x, self.y, self.width, self.height)
 
 
 if __name__ == "__main__":
