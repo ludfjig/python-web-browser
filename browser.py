@@ -691,6 +691,7 @@ class Browser:
         self.window.bind("<Button-1>", self.handle_click)
         self.window.bind("<Key>", self.handle_key)
         self.window.bind("<Return>", self.handle_enter)
+        self.window.bind("<Tab>", self.handle_tab)
 
         self.tabs = []
         self.active_tab = None
@@ -735,6 +736,12 @@ class Browser:
             self.tabs[self.active_tab].load(self.address_bar)
             self.focus = None
             self.draw()
+        elif self.focus == "content":
+            self.tabs[self.active_tab].enter()
+
+    def handle_tab(self, e):
+        if self.focus == "content":
+            self.tabs[self.active_tab].tab()
 
     def load(self, url):
         new_tab = Tab()
@@ -952,8 +959,14 @@ class Tab:
                 url = resolve_url(elt.attributes["href"], self.url)
                 return self.load(url)
             elif elt.tag == "input":
-                elt.attributes["value"] = ""
-                self.focus = elt
+                if elt.attributes.get("type", "") == "checkbox":
+                    if "checked" in elt.attributes:
+                        del elt.attributes["checked"]
+                    else:
+                        elt.attributes["checked"] = ""
+                else:
+                    elt.attributes["value"] = ""
+                    self.focus = elt
                 return self.render()
             elif elt.tag == "button":
                 while elt:
@@ -971,18 +984,52 @@ class Tab:
         body = ""
         for input in inputs:
             name = input.attributes["name"]
-            value = input.attributes.get("value", "")
+            if input.attributes.get("type", "") == "checkbox":
+                if "checked" not in input.attributes:
+                    continue
+                else:
+                    value = input.attributes.get("value", "on")
+            else:
+                value = input.attributes.get("value", "")
             name = urllib.parse.quote(name)
             value = urllib.parse.quote(value)
             body += "&" + name + "=" + value
         body = body[1:]
 
         url = resolve_url(elt.attributes["action"], self.url)
+        if elt.attributes.get("method", "get").lower() == "get":
+            url += "?" + body
+            body = None
         self.load(url, body)
 
     def keypress(self, char):
         if self.focus:
             self.focus.attributes["value"] += char
+            self.render()
+
+    def enter(self):
+        if self.focus and self.focus.tag == "input":
+            curr_node = self.focus.parent
+            while curr_node:
+                if curr_node.tag == "form" and "action" in curr_node.attributes:
+                    return self.submit_form(curr_node)
+                curr_node = curr_node.parent
+
+    def tab(self):
+        if self.focus and self.focus.tag == "input":
+            curr_node = self.focus.parent
+            while curr_node:
+                if curr_node.tag == "form":
+                    break
+                curr_node = curr_node.parent
+
+            children_list = tree_to_list(curr_node, [])
+            input_list = [child for child in children_list if isinstance(
+                child, Element) and child.tag == "input"]
+            curr_index = input_list.index(self.focus)
+            next_index = (curr_index + 1) % len(input_list)
+            self.focus = input_list[next_index]
+            self.focus.attributes["value"] = ""
             self.render()
 
     def go_back(self):
@@ -996,6 +1043,7 @@ class Tab:
 
 
 INPUT_WIDTH_PX = 200
+CHECK_SIZE = 16
 
 
 class InputLayout:
@@ -1017,26 +1065,36 @@ class InputLayout:
         size = int(float(self.node.style["font-size"][:-2]) * .75)
         self.font = get_font(size, weight, style)
 
-        self.width = INPUT_WIDTH_PX
-
         if self.previous:
             space = self.previous.font.measure(" ")
             self.x = self.previous.x + space + self.previous.width
         else:
             self.x = self.parent.x
 
-        self.height = self.font.metrics("linespace")
+        if self.node.attributes.get("type", "") == "checkbox":
+            self.width = CHECK_SIZE
+            self.height = CHECK_SIZE
+        else:
+            self.width = INPUT_WIDTH_PX
+            self.height = self.font.metrics("linespace")
 
     def paint(self, display_list):
         bgcolor = self.node.style.get("background-color",
                                       "transparent")
-        if bgcolor != "transparent":
+        if bgcolor != "transparent" or self.node.attributes.get(
+                "type", "") == "checkbox":
             x2, y2 = self.x + self.width, self.y + self.height
             rect = DrawRect(self.x, self.y, x2, y2, bgcolor)
             display_list.append(rect)
 
         if self.node.tag == "input":
-            text = self.node.attributes.get("value", "")
+            if self.node.attributes.get("type", "") == "checkbox":
+                if "checked" in self.node.attributes:
+                    text = "x"
+                else:
+                    text = ""
+            else:
+                text = self.node.attributes.get("value", "")
         elif self.node.tag == "button":
             if len(self.node.children) == 1 and \
                isinstance(self.node.children[0], Text):
