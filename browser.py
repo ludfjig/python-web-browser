@@ -899,14 +899,8 @@ class Tab:
                    if isinstance(node, Element)
                    and node.tag == "script"
                    and "src" in node.attributes]
-        for script in scripts:
-            header, body = request(resolve_url(script, url))
-            try:
-                self.js.run(body)
-            except dukpy.JSRuntimeError as e:
-                print("Script", script, "crashed", e)
-
         self.rules = self.default_style_sheet.copy()
+
         links = [node.attributes["href"]
                  for node in tree_to_list(self.nodes, [])
                  if isinstance(node, Element)
@@ -919,6 +913,13 @@ class Tab:
             except:
                 continue
             self.rules.extend(CSSParser(body).parse())
+
+        for script in scripts:
+            header, body = request(resolve_url(script, url))
+            try:
+                self.js.run(body)
+            except dukpy.JSRuntimeError as e:
+                print("Script", script, "crashed", e)
         self.render()
 
     def render(self):
@@ -1092,6 +1093,11 @@ class JSContext:
         self.interp.export_function("getAttribute",
                                     self.getAttribute)
         self.interp.export_function("innerHTML_set", self.innerHTML_set)
+        self.interp.export_function("get_children", self.get_children)
+        self.interp.export_function("createElement", self.create_element)
+        self.interp.export_function("appendChild", self.append_child)
+        self.interp.export_function("insertBefore", self.insert_before)
+
         with open("runtime.js") as f:
             self.interp.evaljs(f.read())
 
@@ -1100,6 +1106,32 @@ class JSContext:
 
     def run(self, code):
         return self.interp.evaljs(code)
+
+    def insert_before(self, parent_handle, new_handle, ref_handle):
+        parent_node = self.handle_to_node[parent_handle]
+        new_node = self.handle_to_node[new_handle]
+
+        ref_node = self.handle_to_node[ref_handle]
+        ref_index = parent_node.children.index(ref_node)
+
+        parent_node.children.insert(ref_index, new_node)
+        new_node.parent = parent_node
+
+    def append_child(self, parent, child):
+        parent_node = self.handle_to_node[parent]
+        child_node = self.handle_to_node[child]
+        child_node.parent = parent_node
+        parent_node.children.append(child_node)
+        self.tab.render()
+
+    def create_element(self, tag):
+        elt = Element(tag, {}, None)
+        return self.get_handle(elt)
+
+    def get_children(self, handle):
+        node = self.handle_to_node[handle]
+        children = [elt for elt in node.children if isinstance(elt, Element)]
+        return [self.get_handle(child) for child in children]
 
     def dispatch_event(self, type, elt):
         handle = self.node_to_handle.get(elt, -1)
