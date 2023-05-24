@@ -6,6 +6,7 @@ import tkinter
 import tkinter.font
 import shlex
 import urllib.parse
+import dukpy
 
 
 cache = {}
@@ -725,10 +726,9 @@ class Browser:
             return
         if self.focus == "address bar":
             self.address_bar += e.char
-            self.draw()
         elif self.focus == "content":
             self.tabs[self.active_tab].keypress(e.char)
-            self.draw()
+        self.draw()
 
     def handle_enter(self, e):
         if self.focus == "address bar":
@@ -893,6 +893,19 @@ class Tab:
         headers, body = request(url, body)
         self.nodes = HTMLParser(body).parse()
 
+        self.js = JSContext(self)
+        scripts = [node.attributes["src"] for node
+                   in tree_to_list(self.nodes, [])
+                   if isinstance(node, Element)
+                   and node.tag == "script"
+                   and "src" in node.attributes]
+        for script in scripts:
+            header, body = request(resolve_url(script, url))
+            try:
+                self.js.run(body)
+            except dukpy.JSRuntimeError as e:
+                print("Script", script, "crashed", e)
+
         self.rules = self.default_style_sheet.copy()
         links = [node.attributes["href"]
                  for node in tree_to_list(self.nodes, [])
@@ -902,7 +915,7 @@ class Tab:
                  and node.attributes.get("rel") == "stylesheet"]
         for link in links:
             try:
-                header, body = request(resolve_url(link, self.url))
+                header, body = request(resolve_url(link, url))
             except:
                 continue
             self.rules.extend(CSSParser(body).parse())
@@ -949,13 +962,19 @@ class Tab:
             if isinstance(elt, Text):
                 pass
             elif elt.tag == "a" and "href" in elt.attributes:
+                if self.js.dispatch_event("click", elt):
+                    return
                 url = resolve_url(elt.attributes["href"], self.url)
                 return self.load(url)
             elif elt.tag == "input":
+                if self.js.dispatch_event("click", elt):
+                    return
                 elt.attributes["value"] = ""
                 self.focus = elt
-                return self.render()
+                return
             elif elt.tag == "button":
+                if self.js.dispatch_event("click", elt):
+                    return
                 while elt:
                     if elt.tag == "form" and "action" in elt.attributes:
                         return self.submit_form(elt)
@@ -963,6 +982,8 @@ class Tab:
             elt = elt.parent
 
     def submit_form(self, elt):
+        if self.js.dispatch_event("submit", elt):
+            return
         inputs = [node for node in tree_to_list(elt, [])
                   if isinstance(node, Element)
                   and node.tag == "input"
@@ -982,6 +1003,8 @@ class Tab:
 
     def keypress(self, char):
         if self.focus:
+            if self.js.dispatch_event("keydown", self.focus):
+                return
             self.focus.attributes["value"] += char
             self.render()
 
@@ -990,9 +1013,6 @@ class Tab:
             self.history.pop()
             back = self.history.pop()
             self.load(back)
-
-    def __repr__(self):
-        return "Tab(history={})".format(self.history)
 
 
 INPUT_WIDTH_PX = 200
@@ -1056,6 +1076,65 @@ class InputLayout:
         #     extra = "type=button text={}".format(self.node.children[0].text)
         return "InputLayout(x={}, y={}, width={}, height={})".format(
             self.x, self.y, self.width, self.height)
+
+
+EVENT_DISPATCH_CODE = "new Node(dukpy.handle).dispatchEvent(new Event(dukpy.type))"
+
+
+class JSContext:
+    def __init__(self, tab):
+        self.tab = tab
+
+        self.interp = dukpy.JSInterpreter()
+        self.interp.export_function("log", print)
+        self.interp.export_function("querySelectorAll",
+                                    self.querySelectorAll)
+        self.interp.export_function("getAttribute",
+                                    self.getAttribute)
+        self.interp.export_function("innerHTML_set", self.innerHTML_set)
+        with open("runtime.js") as f:
+            self.interp.evaljs(f.read())
+
+        self.node_to_handle = {}
+        self.handle_to_node = {}
+
+    def run(self, code):
+        return self.interp.evaljs(code)
+
+    def dispatch_event(self, type, elt):
+        handle = self.node_to_handle.get(elt, -1)
+        do_default = self.interp.evaljs(
+            EVENT_DISPATCH_CODE, type=type, handle=handle)
+        return not do_default
+
+    def get_handle(self, elt):
+        if elt not in self.node_to_handle:
+            handle = len(self.node_to_handle)
+            self.node_to_handle[elt] = handle
+            self.handle_to_node[handle] = elt
+        else:
+            handle = self.node_to_handle[elt]
+        return handle
+
+    def querySelectorAll(self, selector_text):
+        selector = CSSParser(selector_text).selector()
+        nodes = [node for node
+                 in tree_to_list(self.tab.nodes, [])
+                 if selector.matches(node)]
+        return [self.get_handle(node) for node in nodes]
+
+    def getAttribute(self, handle, attr):
+        elt = self.handle_to_node[handle]
+        return elt.attributes.get(attr, None)
+
+    def innerHTML_set(self, handle, s):
+        doc = HTMLParser("<html><body>" + s + "</body></html>").parse()
+        new_nodes = doc.children[0].children
+        elt = self.handle_to_node[handle]
+        elt.children = new_nodes
+        for child in elt.children:
+            child.parent = elt
+        self.tab.render()
 
 
 if __name__ == "__main__":
