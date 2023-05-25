@@ -901,6 +901,13 @@ class Tab:
                    and "src" in node.attributes]
         self.rules = self.default_style_sheet.copy()
 
+        for node in tree_to_list(self.nodes, []):
+            if isinstance(node, Element) and "id" in node.attributes:
+                # self.js.interp.evaljs(
+                # CEATE_NEW_NODE, name=node.attributes["id"],
+                # handle=self.js.get_handle(node))
+                self.js.run(f"{node.attributes['id']} = new Node({self.js.get_handle(node)})")
+
         links = [node.attributes["href"]
                  for node in tree_to_list(self.nodes, [])
                  if isinstance(node, Element)
@@ -1080,6 +1087,7 @@ class InputLayout:
 
 
 EVENT_DISPATCH_CODE = "new Node(dukpy.handle).dispatchEvent(new Event(dukpy.type))"
+CEATE_NEW_NODE = "dukpy.name = new Node(dukpy.handle)"
 
 
 class JSContext:
@@ -1163,9 +1171,21 @@ class JSContext:
         doc = HTMLParser("<html><body>" + s + "</body></html>").parse()
         new_nodes = doc.children[0].children
         elt = self.handle_to_node[handle]
+
+        for old_node in elt.children:
+            for node in tree_to_list(old_node, []):
+                if isinstance(node, Element) and "id" in node.attributes:
+                    self.run(f"delete({node.attributes['id']})")
+
         elt.children = new_nodes
         for child in elt.children:
             child.parent = elt
+
+        for old_node in elt.children:
+            for node in tree_to_list(old_node, []):
+                if isinstance(node, Element) and "id" in node.attributes:
+                    self.run(f"{node.attributes['id']} = new Node({self.get_handle(node)})")
+
         self.tab.render()
 
 
