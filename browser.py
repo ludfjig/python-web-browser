@@ -906,7 +906,8 @@ class Tab:
                 # self.js.interp.evaljs(
                 # CEATE_NEW_NODE, name=node.attributes["id"],
                 # handle=self.js.get_handle(node))
-                self.js.run(f"{node.attributes['id']} = new Node({self.js.get_handle(node)})")
+                self.js.run(
+                    f"{node.attributes['id']} = new Node({self.js.get_handle(node)})")
 
         links = [node.attributes["href"]
                  for node in tree_to_list(self.nodes, [])
@@ -1143,8 +1144,10 @@ class JSContext:
 
     def dispatch_event(self, type, elt):
         handle = self.node_to_handle.get(elt, -1)
-        do_default = self.interp.evaljs(
+        do_default, stop_propagation = self.interp.evaljs(
             EVENT_DISPATCH_CODE, type=type, handle=handle)
+        if not stop_propagation and elt.parent:
+            self.dispatch_event(type, elt.parent)
         return not do_default
 
     def get_handle(self, elt):
@@ -1184,7 +1187,8 @@ class JSContext:
         for old_node in elt.children:
             for node in tree_to_list(old_node, []):
                 if isinstance(node, Element) and "id" in node.attributes:
-                    self.run(f"{node.attributes['id']} = new Node({self.get_handle(node)})")
+                    self.run(
+                        f"{node.attributes['id']} = new Node({self.get_handle(node)})")
 
         self.tab.render()
 

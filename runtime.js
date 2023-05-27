@@ -44,10 +44,15 @@ LISTENERS = {}
 function Event(type) {
     this.type = type
     this.do_default = true;
+    this.stop_propagation = false;
 }
 
 Event.prototype.preventDefault = function() {
     this.do_default = false;
+}
+
+Event.prototype.stopPropagation = function() {
+    this.stop_propagation = true;
 }
 
 Node.prototype.addEventListener = function(type, listener) {
@@ -77,5 +82,5 @@ Node.prototype.dispatchEvent = function(evt) {
     for (var i = 0; i < list.length; i++) {
         list[i].call(this, evt);
     }
-    return evt.do_default;
+    return [evt.do_default, evt.stop_propagation];
 }
