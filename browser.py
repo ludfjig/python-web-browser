@@ -19,6 +19,7 @@ BLOCK_ELEMENTS = [
     "figcaption", "main", "div", "table", "form", "fieldset",
     "legend", "details", "summary"
 ]
+COOKIE_JAR = {}
 
 
 def p(m):
@@ -52,17 +53,16 @@ def tree_to_list(tree, list):
     return list
 
 
-def request(url, payload=None):
+def request(url, top_level_url, payload=None, refer_policy=None):
     scheme, url = url.split("://", 1)
     assert scheme in ["http", "https"], \
         "Unknown scheme {}".format(scheme)
 
-    if ("/" in url):
-        host, path = url.split("/", 1)
-        path = "/" + path
-    else:
-        host = url
-        path = '/'
+    if "/" not in url:
+        url = url + "/"
+    host, path = url.split("/", 1)
+
+    path = "/" + path
     port = 80 if scheme == "http" else 443
 
     if ":" in host:
@@ -74,19 +74,45 @@ def request(url, payload=None):
         type=socket.SOCK_STREAM,
         proto=socket.IPPROTO_TCP,
     )
+
     s.connect((host, port))
 
     if scheme == "https":
-        ctx = ssl.create_default_context()
-        s = ctx.wrap_socket(s, server_hostname=host)
+        try:
+            ctx = ssl.create_default_context()
+            s = ctx.wrap_socket(s, server_hostname=host)
+        except Exception:
+            return {}, "<!doctype html>\nSecure Connection Failed", False
 
     method = "POST" if payload else "GET"
-
     body = "{} {} HTTP/1.0\r\n".format(method, path)
-    if payload:
-        length = len(payload.encode("utf8"))
-        body += "Content-Length: {}\r\n".format(length)
     body += "Host: {}\r\n".format(host)
+    if host in COOKIE_JAR:
+        cookie, params = COOKIE_JAR[host]
+        allow_cookie = True
+        if top_level_url and params.get("samesite", "none") == "lax":
+            _, _, top_level_host, _ = top_level_url.split("/", 3)
+            if ":" in top_level_host:
+                top_level_host, _ = top_level_host.split(":", 1)
+            allow_cookie = (host == top_level_host or method == "GET")
+        if allow_cookie:
+            body += "Cookie: {}\r\n".format(cookie)
+    if payload:
+        content_length = len(payload.encode("utf8"))
+        body += "Content-Length: {}\r\n".format(content_length)
+
+    if refer_policy == "no-referrer":
+        pass
+    elif refer_policy == "same-origin":
+        _, _, top_level_host, _ = top_level_url.split("/", 3)
+        if ":" in top_level_host:
+            top_level_host, _ = top_level_host.split(":", 1)
+
+        if top_level_host == host:
+            body += "Referer: {}\r\n".format(top_level_url)
+    else:
+        body += "Referer: {}\r\n".format(top_level_url)
+
     body += "\r\n" + (payload if payload else "")
     s.send(body.encode("utf8"))
     response = s.makefile("r", encoding="utf8", newline="\r\n")
@@ -103,13 +129,28 @@ def request(url, payload=None):
         header, value = line.split(":", 1)
         headers[header.lower()] = value.strip()
 
+    if "set-cookie" in headers:
+        params = {}
+        if ";" in headers["set-cookie"]:
+            cookie, rest = headers["set-cookie"].split(";", 1)
+            for param_pair in rest.split(";"):
+                if '=' in param_pair:
+                    name, value = param_pair.strip().split("=", 1)
+                else:
+                    name = param_pair.strip()
+                    value = ""
+                params[name.lower()] = value.lower()
+        else:
+            cookie = headers["set-cookie"]
+        COOKIE_JAR[host] = (cookie, params)
+
     assert "transfer-encoding" not in headers
     assert "content-encoding" not in headers
 
     body = response.read()
     s.close()
 
-    return headers, body
+    return headers, body, scheme == "https"
 
 
 def layout_mode(node):
@@ -726,9 +767,10 @@ class Browser:
             return
         if self.focus == "address bar":
             self.address_bar += e.char
+            self.draw()
         elif self.focus == "content":
             self.tabs[self.active_tab].keypress(e.char)
-        self.draw()
+            self.draw()
 
     def handle_enter(self, e):
         if self.focus == "address bar":
@@ -770,13 +812,19 @@ class Browser:
         self.canvas.create_rectangle(40, 50, WIDTH - 10, 90,
                                      outline="black", width=1)
         if self.focus == "address bar":
+            address_bar_text = self.address_bar
+
+            if self.tabs[self.active_tab].secure:
+                address_bar_text + "\N{lock}" + address_bar_text
             self.canvas.create_text(
-                55, 55, anchor='nw', text=self.address_bar,
+                55, 55, anchor='nw', text=address_bar_text,
                 font=buttonfont, fill="black")
             w = buttonfont.measure(self.address_bar)
             self.canvas.create_line(55 + w, 55, 55 + w, 85, fill="black")
         else:
             url = self.tabs[self.active_tab].url
+            if self.tabs[self.active_tab].secure:
+                url = "\N{lock}" + url
             self.canvas.create_text(55, 55, anchor='nw', text=url,
                                     font=buttonfont, fill="black")
 
@@ -882,15 +930,33 @@ class Tab:
         self.history = []
         self.focus = None
         self.url = None
+        self.refer_policy = None
 
         with open("browser.css") as f:
             self.default_style_sheet = CSSParser(f.read()).parse()
 
+    def allowed_request(self, url):
+        return self.allowed_origins == None or \
+            url_origin(url) in self.allowed_origins
+
     def load(self, url, body=None):
+        headers, body, sec = request(url, self.url, body, self.refer_policy)
+        self.secure = sec
         self.scroll = 0
         self.url = url
         self.history.append(url)
-        headers, body = request(url, body)
+
+        self.allowed_origins = None
+        if "content-security-policy" in headers:
+            csp = headers["content-security-policy"].split()
+            if len(csp) > 0 and csp[0] == "default-src":
+                self.allowed_origins = csp[1:]
+
+        if "referrer-policy" in headers:
+            self.refer_policy = headers["referrer-policy"]
+        else:
+            self.refer_policy = None
+
         self.nodes = HTMLParser(body).parse()
 
         self.js = JSContext(self)
@@ -900,7 +966,13 @@ class Tab:
                    and node.tag == "script"
                    and "src" in node.attributes]
         for script in scripts:
-            header, body = request(resolve_url(script, url))
+            script_url = resolve_url(script, url)
+            if not self.allowed_request(script_url):
+                print("Blocked script", script, "due to CSP")
+                continue
+            header, body, secure = request(
+                script_url, url, refer_policy=self.refer_policy)
+            self.secure = secure
             try:
                 self.js.run(body)
             except dukpy.JSRuntimeError as e:
@@ -914,8 +986,12 @@ class Tab:
                  and "href" in node.attributes
                  and node.attributes.get("rel") == "stylesheet"]
         for link in links:
+            style_url = resolve_url(link, url)
+            if not self.allowed_request(style_url):
+                print("Blocked style", link, "due to CSP")
+                continue
             try:
-                header, body = request(resolve_url(link, url))
+                header, body, _ = request(style_url, url, self.refer_policy)
             except:
                 continue
             self.rules.extend(CSSParser(body).parse())
@@ -958,23 +1034,19 @@ class Tab:
         if not objs:
             return
         elt = objs[-1].node
+        if elt and self.js.dispatch_event("click", elt):
+            return
         while elt:
             if isinstance(elt, Text):
                 pass
             elif elt.tag == "a" and "href" in elt.attributes:
-                if self.js.dispatch_event("click", elt):
-                    return
                 url = resolve_url(elt.attributes["href"], self.url)
                 return self.load(url)
             elif elt.tag == "input":
-                if self.js.dispatch_event("click", elt):
-                    return
                 elt.attributes["value"] = ""
                 self.focus = elt
                 return
             elif elt.tag == "button":
-                if self.js.dispatch_event("click", elt):
-                    return
                 while elt:
                     if elt.tag == "form" and "action" in elt.attributes:
                         return self.submit_form(elt)
@@ -1047,6 +1119,10 @@ class InputLayout:
 
         self.height = self.font.metrics("linespace")
 
+        if self.node.attributes.get("type", "") == "hidden":
+            self.height = 0.0
+            self.width = 0.0
+
     def paint(self, display_list):
         bgcolor = self.node.style.get("background-color",
                                       "transparent")
@@ -1066,8 +1142,12 @@ class InputLayout:
                 text = ""
 
         color = self.node.style["color"]
-        display_list.append(
-            DrawText(self.x, self.y, text, self.font, color))
+        if self.node.attributes.get("type", "") == "password":
+            display_list.append(
+                DrawText(self.x, self.y, "*" * len(text), self.font, color))
+        else:
+            display_list.append(
+                DrawText(self.x, self.y, text, self.font, color))
 
     def __repr__(self):
         # if self.node.tag == "input":
@@ -1081,6 +1161,11 @@ class InputLayout:
 EVENT_DISPATCH_CODE = "new Node(dukpy.handle).dispatchEvent(new Event(dukpy.type))"
 
 
+def url_origin(url):
+    scheme_colon, _, host, _ = url.split("/", 3)
+    return scheme_colon + "//" + host
+
+
 class JSContext:
     def __init__(self, tab):
         self.tab = tab
@@ -1092,6 +1177,12 @@ class JSContext:
         self.interp.export_function("getAttribute",
                                     self.getAttribute)
         self.interp.export_function("innerHTML_set", self.innerHTML_set)
+        self.interp.export_function("XMLHttpRequest_send",
+                                    self.XMLHttpRequest_send)
+        self.interp.export_function("get_cookie",
+                                    self.get_cookie)
+        self.interp.export_function("set_cookie",
+                                    self.set_cookie)
         with open("runtime.js") as f:
             self.interp.evaljs(f.read())
 
@@ -1099,7 +1190,36 @@ class JSContext:
         self.handle_to_node = {}
 
     def run(self, code):
-        return self.interp.evaljs(code)
+        self.interp.evaljs(code)
+
+    def get_cookie(self):
+        _, _, host, _ = self.tab.url.split("/", 3)
+
+        cookie, params = COOKIE_JAR.get(host, ("", {}))
+        if "httponly" in params:
+            return ""
+
+        if cookie:
+            return cookie
+        return ""
+
+    def set_cookie(self, cookie):
+        _, _, host, _ = self.tab.url.split("/", 3)
+        old_cookie, old_params = COOKIE_JAR.get(host, ("", {}))
+        if "httponly" in old_params:
+            return
+        params = {}
+        if ";" in cookie:
+            cookie, rest = cookie.split(";", 1)
+            for param_pair in rest.split(";"):
+                if "=" in param_pair:
+                    name, value = param_pair.split("=", 1)
+                    name = name.strip()
+                else:
+                    name = param_pair.strip()
+                    value = ""
+                params[name.lower()] = value.lower().strip()
+        COOKIE_JAR[host] = (cookie, params)
 
     def dispatch_event(self, type, elt):
         handle = self.node_to_handle.get(elt, -1)
@@ -1135,6 +1255,15 @@ class JSContext:
         for child in elt.children:
             child.parent = elt
         self.tab.render()
+
+    def XMLHttpRequest_send(self, method, url, body):
+        full_url = resolve_url(url, self.tab.url)
+        if not self.tab.allowed_request(full_url):
+            raise Exception("Cross-origin XHR blocked by CSP")
+        headers, out, _ = request(full_url, self.tab.url, body)
+        if url_origin(full_url) != url_origin(self.tab.url):
+            raise Exception("Cross-origin XHR request not allowed")
+        return out
 
 
 if __name__ == "__main__":
